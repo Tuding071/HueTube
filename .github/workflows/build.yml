@@ -35,7 +35,6 @@ jobs:
           mkdir -p gradle/wrapper
 
           cp HT.kt $PKG/
-          cp WebViewManager.kt $PKG/
 
           cat > settings.gradle.kts << 'EOF'
           pluginManagement {
@@ -234,9 +233,10 @@ jobs:
                       b = int(20 + (200 - 20) * t)
                       d.point((x, y), fill=(max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)), 255))
 
-              # White play triangle (pointing right)
+              # White play triangle (rotated 90° to point right)
               cx, cy = size / 2, size / 2
               tri_size = size * 0.28
+              # Triangle pointing right
               pts = [
                   (cx - tri_size * 0.55, cy - tri_size),
                   (cx - tri_size * 0.55, cy + tri_size),
@@ -282,7 +282,6 @@ jobs:
           mkdir -p HueTube-release/.github/workflows
           cp app/build/outputs/apk/release/app-arm64-v8a-release.apk HueTube-release/HueTube.apk
           cp HT.kt HueTube-release/
-          cp WebViewManager.kt HueTube-release/
           cp .github/workflows/build.yml HueTube-release/.github/workflows/
 
           APK_SIZE=$(ls -lh app/build/outputs/apk/release/app-arm64-v8a-release.apk | awk '{print $5}')
