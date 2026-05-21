@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.0 (YouTube WebView)
+// HueTube - V2.0 (YouTube WebView with PiP + Fullscreen)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
@@ -13,8 +13,16 @@
 //   Text Primary:  #FFFFFF  (white)
 //   Text Muted:    #888888  (grey)
 //
-// SHAPES:
-//   Everything:    RectangleShape  (0dp corner radius)
+// SLOTS:
+//   Slot 0 — Homepage (fixed m.youtube.com, never navigates)
+//   Slot 1 — Content  (dynamic, full WebView history)
+//     States: ACTIVE | PIP | NONE
+//
+// BACK NAVIGATION:
+//   Content canGoBack → goBack()
+//   Content at start   → minimize to PiP, show Homepage
+//   Homepage + PiP     → close PiP (destroy content)
+//   Homepage no PiP    → finish()
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -26,6 +34,7 @@
 package com.huetube.app
 
 import android.os.Bundle
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -36,15 +45,28 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RectangleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,28 +79,37 @@ class MainActivity : ComponentActivity() {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 2/10 — Constants ===
+// === PART 2/10 — Constants & App Context ===
 // ═══════════════════════════════════════════════════════════════════
 
 private val BG = Color(0xFF0A0A0A)
 private val SURFACE = Color(0xFF121212)
 private const val HOMEPAGE_URL = "https://m.youtube.com"
-private const val MAX_ACTIVE_PAGES = 2
-private const val MAX_WARM_PAGES = 3
+
+object AppContextHolder {
+    lateinit var context: android.content.Context
+}
 
 // END OF PART 2/10
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 3/10 — Tab State Data Class ===
+// === PART 3/10 — Slot 1 State Enum & TabState ===
 // ═══════════════════════════════════════════════════════════════════
+
+enum class ContentState {
+    ACTIVE,   // Full screen, visible
+    PIP,      // Minimized overlay on homepage
+    NONE      // Destroyed, not present
+}
 
 class TabState {
     var webView by mutableStateOf<WebView?>(null)
     var url by mutableStateOf(HOMEPAGE_URL)
     var title by mutableStateOf("YouTube")
-    var isDiscarded by mutableStateOf(false)
     var lastUsed by mutableLongStateOf(System.currentTimeMillis())
+    var contentState by mutableStateOf(ContentState.NONE)
+    var customView by mutableStateOf<View?>(null)  // Fullscreen video view
 }
 
 // END OF PART 3/10
@@ -88,7 +119,13 @@ class TabState {
 // === PART 4/10 — WebView Factory ===
 // ═══════════════════════════════════════════════════════════════════
 
-fun createWebView(url: String, onNewTabRequest: (String) -> Unit): WebView {
+fun createWebView(
+    url: String,
+    tabState: TabState,
+    onNewContentRequest: (String) -> Unit,
+    onCustomViewShow: () -> Unit,
+    onCustomViewHide: () -> Unit
+): WebView {
     return WebView(AppContextHolder.context).apply {
         setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
         layoutParams = ViewGroup.LayoutParams(
@@ -108,20 +145,32 @@ fun createWebView(url: String, onNewTabRequest: (String) -> Unit): WebView {
 
         webChromeClient = object : WebChromeClient() {
             override fun onReceivedTitle(view: WebView, title: String?) {
-                // Title updates handled by TabState
+                if (title != null && title.isNotBlank()) {
+                    tabState.title = title
+                }
+            }
+
+            // ── Fullscreen video support ──────────────────────────
+            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                tabState.customView = view
+                onCustomViewShow()
+            }
+
+            override fun onHideCustomView() {
+                tabState.customView = null
+                onCustomViewHide()
             }
         }
 
         webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                tabState.url = url
                 // Inject dark mode
                 view.evaluateJavascript("""
                     (function() {
-                        // Force dark theme
                         document.documentElement.style.setProperty('color-scheme', 'dark');
                         document.documentElement.style.setProperty('background-color', '#0A0A0A');
                         
-                        // Override prefers-color-scheme
                         var originalMatchMedia = window.matchMedia;
                         window.matchMedia = function(query) {
                             var result = originalMatchMedia(query);
@@ -140,10 +189,7 @@ fun createWebView(url: String, onNewTabRequest: (String) -> Unit): WebView {
                             return result;
                         };
                         
-                        // Try to force YouTube dark theme
-                        if (window.yt && window.yt.config_) {
-                            document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
-                        }
+                        document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
                     })();
                 """.trimIndent(), null)
             }
@@ -152,10 +198,9 @@ fun createWebView(url: String, onNewTabRequest: (String) -> Unit): WebView {
                 view: WebView,
                 request: android.webkit.WebResourceRequest
             ): Boolean {
-                // Open all link taps in new tab
                 val clickedUrl = request.url.toString()
-                if (request.isForMainFrame && clickedUrl != view.url) {
-                    onNewTabRequest(clickedUrl)
+                if (request.isForMainFrame && clickedUrl != view.url && clickedUrl != HOMEPAGE_URL) {
+                    onNewContentRequest(clickedUrl)
                     return true
                 }
                 return false
@@ -170,69 +215,56 @@ fun createWebView(url: String, onNewTabRequest: (String) -> Unit): WebView {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — App Context Holder ===
+// === PART 5/10 — Back Handler Logic ===
 // ═══════════════════════════════════════════════════════════════════
 
-object AppContextHolder {
-    lateinit var context: android.content.Context
+sealed class BackAction {
+    object GoBackInHistory : BackAction()
+    object MinimizeToPip : BackAction()
+    object ClosePip : BackAction()
+    object CloseApp : BackAction()
+}
+
+fun determineBackAction(contentState: ContentState, contentTab: TabState?): BackAction {
+    return when {
+        contentState == ContentState.ACTIVE && contentTab?.webView?.canGoBack() == true -> {
+            BackAction.GoBackInHistory
+        }
+        contentState == ContentState.ACTIVE -> {
+            BackAction.MinimizeToPip
+        }
+        contentState == ContentState.PIP -> {
+            BackAction.ClosePip
+        }
+        else -> {
+            BackAction.CloseApp
+        }
+    }
 }
 
 // END OF PART 5/10
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 6/10 — Tab Lifecycle Manager ===
+// === PART 6/10 — Fullscreen Manager ===
 // ═══════════════════════════════════════════════════════════════════
 
-fun manageTabLifecycle(tabs: MutableList<TabState>, activeIndex: Int) {
-    if (activeIndex < 0 || activeIndex >= tabs.size) return
-
-    val activeTab = tabs[activeIndex]
-    
-    // Activate current tab
-    if (activeTab.webView == null && activeTab.isDiscarded) {
-        activeTab.webView = createWebView(activeTab.url) { url ->
-            // New tab request callback — handled externally
-        }
-        activeTab.isDiscarded = false
-        activeTab.lastUsed = System.currentTimeMillis()
-    }
-    activeTab.lastUsed = System.currentTimeMillis()
-
-    // Track active (non-discarded) pages
-    val activePages = tabs.filterIndexed { i, t ->
-        i != activeIndex && !t.isDiscarded && t.webView != null
+class FullscreenManager(val activity: android.app.Activity) {
+    fun enterFullscreen() {
+        activity.window.decorView.systemUiVisibility = (
+            android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        )
     }
 
-    // Keep only MAX_ACTIVE_PAGES - 1 other pages active
-    if (activePages.size > MAX_ACTIVE_PAGES - 1) {
-        val toDiscard = activePages
-            .sortedBy { it.lastUsed }
-            .take(activePages.size - (MAX_ACTIVE_PAGES - 1))
-        for (tab in toDiscard) {
-            tab.webView?.destroy()
-            tab.webView = null
-            tab.isDiscarded = true
-        }
-    }
-
-    // Ensure total warm tabs (active + discarded) doesn't exceed MAX_WARM_PAGES
-    val warmTabs = tabs.filter { !it.isDiscarded || it.webView != null }
-    if (warmTabs.size > MAX_WARM_PAGES) {
-        val toDestroy = warmTabs
-            .filter { it.isDiscarded }
-            .sortedBy { it.lastUsed }
-        val extraCount = warmTabs.size - MAX_WARM_PAGES
-        for (tab in toDestroy.take(extraCount)) {
-            val index = tabs.indexOf(tab)
-            if (index >= 0 && index != activeIndex) {
-                tab.webView?.destroy()
-                tabs.removeAt(index)
-                if (activeIndex > index) {
-                    // Adjust active index — handled in composable
-                }
-            }
-        }
+    fun exitFullscreen() {
+        activity.window.decorView.systemUiVisibility = (
+            android.view.View.SYSTEM_UI_FLAG_VISIBLE
+        )
     }
 }
 
@@ -240,52 +272,73 @@ fun manageTabLifecycle(tabs: MutableList<TabState>, activeIndex: Int) {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 7/10 — Back Handler Logic ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// Back button behavior:
-//   1. If current tab can go back in WebView history → go back
-//   2. If at homepage → refresh page
-//   3. If already refreshed → close app
-//
+// === PART 7/10 — PiP Overlay Composable ===
 // ═══════════════════════════════════════════════════════════════════
 
-class BackHandlerState {
-    var homepageRefreshCount by mutableIntStateOf(0)
-    var lastBackTime by mutableLongStateOf(0L)
-    
-    fun handleBack(currentTab: TabState?, onCloseApp: () -> Unit) {
-        val now = System.currentTimeMillis()
-        
-        if (currentTab?.webView?.canGoBack() == true) {
-            currentTab.webView?.goBack()
-            homepageRefreshCount = 0
-            return
-        }
-        
-        val currentUrl = currentTab?.url ?: ""
-        val isOnHomepage = currentUrl == HOMEPAGE_URL || 
-                          currentUrl.startsWith("$HOMEPAGE_URL?") ||
-                          currentUrl == "about:blank"
-        
-        if (isOnHomepage) {
-            homepageRefreshCount++
-            lastBackTime = now
-            
-            if (homepageRefreshCount >= 2) {
-                onCloseApp()
-            } else {
-                currentTab?.webView?.reload()
+@Composable
+fun PipOverlay(
+    webView: WebView,
+    onTapExpand: () -> Unit,
+    onClose: () -> Unit
+) {
+    val density = LocalDensity.current
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    var pipWidth by remember { mutableStateOf(0) }
+    var pipHeight by remember { mutableStateOf(0) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(10f)
+    ) {
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .size(width = 240.dp, height = 135.dp)
+                .clip(RectangleShape)
+                .background(SURFACE)
+                .onGloballyPositioned { coords ->
+                    pipWidth = coords.size.width
+                    pipHeight = coords.size.height
+                    if (offsetX == 0f && offsetY == 0f) {
+                        // Position bottom-right initially
+                        offsetX = coords.parentCoordinates?.size?.width?.toFloat()?.minus(pipWidth)?.minus(16.dp.toPx()) ?: 0f
+                        offsetY = coords.parentCoordinates?.size?.height?.toFloat()?.minus(pipHeight)?.minus(16.dp.toPx()) ?: 0f
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        offsetX += dragAmount.x
+                        offsetY += dragAmount.y
+                    }
+                }
+        ) {
+            // WebView content
+            AndroidView(
+                factory = { webView },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { onTapExpand() }
+            )
+
+            // Close button
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(24.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    "Close PiP",
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp)
+                )
             }
-        } else {
-            currentTab?.webView?.loadUrl(HOMEPAGE_URL)
-            homepageRefreshCount = 0
         }
-    }
-    
-    fun reset() {
-        homepageRefreshCount = 0
-        lastBackTime = 0L
     }
 }
 
@@ -299,100 +352,208 @@ class BackHandlerState {
 @Composable
 fun HueTubeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? android.app.Activity ?: return
     AppContextHolder.context = context.applicationContext
 
-    // ── Tab Management ──────────────────────────────────────────
-    val tabs = remember { mutableStateListOf<TabState>() }
-    var currentTabIndex by remember { mutableIntStateOf(-1) }
-    val backHandlerState = remember { BackHandlerState() }
+    val fullscreenManager = remember { FullscreenManager(activity) }
 
-    // Initialize with home tab
-    LaunchedEffect(Unit) {
-        if (tabs.isEmpty()) {
-            val homeTab = TabState().apply {
-                webView = createWebView(HOMEPAGE_URL) { url ->
-                    // New tab creation handled in the callback
+    // ── Home Tab (Slot 0) ────────────────────────────────────────
+    val homeTab = remember {
+        TabState().apply {
+            webView = WebView(context).apply {
+                setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                with(settings) {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    loadWithOverviewMode = true
+                    useWideViewPort = true
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                    setSupportZoom(true)
+                    mediaPlaybackRequiresUserGesture = false
                 }
-                url = HOMEPAGE_URL
-                isDiscarded = false
-                lastUsed = System.currentTimeMillis()
+                webChromeClient = object : WebChromeClient() {}
+                webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        if (url != HOMEPAGE_URL && url != "about:blank") {
+                            // Homepage tried to navigate away — force back
+                            view.loadUrl(HOMEPAGE_URL)
+                        }
+                        view.evaluateJavascript("""
+                            (function() {
+                                document.documentElement.style.setProperty('color-scheme', 'dark');
+                                document.documentElement.style.setProperty('background-color', '#0A0A0A');
+                                var originalMatchMedia = window.matchMedia;
+                                window.matchMedia = function(query) {
+                                    var result = originalMatchMedia(query);
+                                    if (query.includes('prefers-color-scheme')) {
+                                        return {
+                                            matches: true, media: query, onchange: null,
+                                            addListener: function(cb) { cb(this); },
+                                            removeListener: function() {},
+                                            addEventListener: function(type, cb) { if (type === 'change') cb(this); },
+                                            removeEventListener: function() {},
+                                            dispatchEvent: function() { return true; }
+                                        };
+                                    }
+                                    return result;
+                                };
+                                document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
+                            })();
+                        """.trimIndent(), null)
+                    }
+                }
+                loadUrl(HOMEPAGE_URL)
             }
-            tabs.add(homeTab)
-            currentTabIndex = 0
+            contentState = ContentState.ACTIVE
+            url = HOMEPAGE_URL
         }
     }
 
-    // ── New Tab Creation Helper ─────────────────────────────────
-    fun createNewTab(url: String) {
-        val newTab = TabState().apply {
-            webView = createWebView(url) { newUrl ->
-                // Recursive: taps in new tabs also create tabs
-            }
-            this.url = url
-            isDiscarded = false
-            lastUsed = System.currentTimeMillis()
+    // ── Content Tab (Slot 1) ─────────────────────────────────────
+    val contentTab = remember { TabState() }
+
+    // ── Show homepage? ───────────────────────────────────────────
+    var showHomepage by remember { mutableStateOf(true) }
+
+    // ── Fullscreen state ─────────────────────────────────────────
+    var isFullscreen by remember { mutableStateOf(false) }
+
+    // ── Create content tab ───────────────────────────────────────
+    fun createContentTab(url: String) {
+        // Destroy old if exists
+        if (contentTab.webView != null) {
+            contentTab.webView?.destroy()
         }
-        tabs.add(newTab)
-        val newIndex = tabs.lastIndex
-        currentTabIndex = newIndex
-        manageTabLifecycle(tabs, currentTabIndex)
+        contentTab.webView = createWebView(
+            url = url,
+            tabState = contentTab,
+            onNewContentRequest = { newUrl -> createContentTab(newUrl) },
+            onCustomViewShow = {
+                isFullscreen = true
+                fullscreenManager.enterFullscreen()
+            },
+            onCustomViewHide = {
+                isFullscreen = false
+                fullscreenManager.exitFullscreen()
+            }
+        )
+        contentTab.url = url
+        contentTab.contentState = ContentState.ACTIVE
+        contentTab.lastUsed = System.currentTimeMillis()
+        showHomepage = false
+    }
+
+    // ── Handle custom view directly ──────────────────────────────
+    LaunchedEffect(contentTab.customView) {
+        val customView = contentTab.customView
+        if (customView != null) {
+            // Custom view is shown by WebChromeClient directly
+            // No additional handling needed — it overlays the WebView
+        }
     }
 
     // ── Back Handler ────────────────────────────────────────────
     BackHandler {
-        val currentTab = tabs.getOrNull(currentTabIndex)
-        backHandlerState.handleBack(currentTab) {
-            // Close app
-            (context as? android.app.Activity)?.finish()
+        if (isFullscreen) {
+            // In fullscreen, exit fullscreen first
+            isFullscreen = false
+            fullscreenManager.exitFullscreen()
+            contentTab.customView = null
+            // WebChromeClient.onHideCustomView() will be called by WebView
+            return@BackHandler
+        }
+
+        when (determineBackAction(contentTab.contentState, contentTab)) {
+            BackAction.GoBackInHistory -> {
+                contentTab.webView?.goBack()
+            }
+            BackAction.MinimizeToPip -> {
+                contentTab.contentState = ContentState.PIP
+                showHomepage = true
+            }
+            BackAction.ClosePip -> {
+                contentTab.webView?.destroy()
+                contentTab.webView = null
+                contentTab.contentState = ContentState.NONE
+                contentTab.url = HOMEPAGE_URL
+            }
+            BackAction.CloseApp -> {
+                activity.finish()
+            }
         }
     }
 
-    // ── Manage lifecycle when tab changes ───────────────────────
-    LaunchedEffect(currentTabIndex) {
-        if (currentTabIndex >= 0) {
-            manageTabLifecycle(tabs, currentTabIndex)
-            backHandlerState.reset()
-        }
-    }
-
+    // ── Main Layout ─────────────────────────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BG)
-            .systemBarsPadding()
     ) {
-        // ── Render current tab with pop-up animation ─────────────
-        val currentTab = tabs.getOrNull(currentTabIndex)
-        
-        if (currentTab != null && currentTab.webView != null) {
-            AnimatedVisibility(
-                visible = true,
-                enter = slideInVertically(
-                    initialOffsetY = { it },  // Start from bottom
-                    animationSpec = tween(durationMillis = 300)
-                ) + fadeIn(animationSpec = tween(durationMillis = 300)),
-                exit = slideOutVertically(
-                    targetOffsetY = { it },    // Exit to bottom
-                    animationSpec = tween(durationMillis = 200)
-                ) + fadeOut(animationSpec = tween(durationMillis = 200))
-            ) {
+        // ── Homepage (Slot 0) ────────────────────────────────────
+        AnimatedVisibility(
+            visible = showHomepage,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(200)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AndroidView(
+                factory = { homeTab.webView!! },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .systemBarsPadding()
+            )
+        }
+
+        // ── Content fullscreen (Slot 1 ACTIVE) ──────────────────
+        AnimatedVisibility(
+            visible = contentTab.contentState == ContentState.ACTIVE && !showHomepage,
+            enter = slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = tween(300)
+            ) + fadeIn(tween(300)),
+            exit = slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(200)
+            ) + fadeOut(tween(200)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            contentTab.webView?.let { wv ->
                 AndroidView(
-                    factory = { currentTab.webView!! },
+                    factory = { wv },
                     modifier = Modifier.fillMaxSize()
                 )
             }
-        } else if (currentTab != null && currentTab.isDiscarded) {
-            // Placeholder while tab loads
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Loading...",
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 16.sp
-                )
-            }
+        }
+
+        // ── PiP Overlay ─────────────────────────────────────────
+        if (contentTab.contentState == ContentState.PIP && contentTab.webView != null) {
+            PipOverlay(
+                webView = contentTab.webView!!,
+                onTapExpand = {
+                    contentTab.contentState = ContentState.ACTIVE
+                    showHomepage = false
+                },
+                onClose = {
+                    contentTab.webView?.destroy()
+                    contentTab.webView = null
+                    contentTab.contentState = ContentState.NONE
+                }
+            )
+        }
+
+        // ── Fullscreen custom view ──────────────────────────────
+        if (isFullscreen && contentTab.customView != null) {
+            AndroidView(
+                factory = { contentTab.customView!! },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(100f)
+            )
         }
     }
 }
@@ -403,8 +564,6 @@ fun HueTubeApp() {
 // ═══════════════════════════════════════════════════════════════════
 // === PART 9/10 — Reserved for Future Features ===
 // ═══════════════════════════════════════════════════════════════════
-
-// Future parts will go here as features are added
 
 // END OF PART 9/10
 
