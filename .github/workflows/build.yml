@@ -156,6 +156,7 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <application
                   android:allowBackup="false"
                   android:label="@string/app_name"
@@ -216,15 +217,12 @@ jobs:
           pip install Pillow --quiet
           python3 << 'PYEOF'
           from PIL import Image, ImageDraw
-          import os, math
+          import os
 
           def make_icon(size):
               BG = (10, 10, 10, 255)
-
               img = Image.new('RGBA', (size, size), BG)
               d = ImageDraw.Draw(img)
-
-              # Red to cyan gradient (diagonal)
               for y in range(size):
                   for x in range(size):
                       t = (x + y) / (2 * size)
@@ -232,18 +230,14 @@ jobs:
                       g = int(20 + (200 - 20) * t)
                       b = int(20 + (200 - 20) * t)
                       d.point((x, y), fill=(max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)), 255))
-
-              # White play triangle (rotated 90° to point right)
               cx, cy = size / 2, size / 2
               tri_size = size * 0.28
-              # Triangle pointing right
               pts = [
                   (cx - tri_size * 0.55, cy - tri_size),
                   (cx - tri_size * 0.55, cy + tri_size),
                   (cx + tri_size * 0.7, cy)
               ]
               d.polygon(pts, fill=(255, 255, 255, 255))
-
               return img
 
           sizes = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
@@ -253,7 +247,6 @@ jobs:
               icon = make_icon(s)
               icon.save(f'{path}/ic_launcher.png')
               icon.save(f'{path}/ic_launcher_round.png')
-
           print("Icons done.")
           PYEOF
 
