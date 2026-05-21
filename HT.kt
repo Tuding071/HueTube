@@ -74,7 +74,6 @@ class MainActivity : ComponentActivity() {
 
 // END OF PART 1/10
 
-
 // ═══════════════════════════════════════════════════════════════════
 // === PART 2/10 — Constants ===
 // ═══════════════════════════════════════════════════════════════════
@@ -266,6 +265,7 @@ fun createContentWebView(
 // END OF PART 6/10
 
 
+
 // ═══════════════════════════════════════════════════════════════════
 // === PART 7/10 — Banner Composable ===
 // ═══════════════════════════════════════════════════════════════════
@@ -294,7 +294,7 @@ fun PlayingBanner(
             .clickable { onTap() },
         color = BANNER_BG,
         shape = RectangleShape,
-        tonalElevation = 0.dp
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
@@ -350,6 +350,7 @@ fun PlayingBanner(
 }
 
 // END OF PART 7/10
+
 
 
 // ═══════════════════════════════════════════════════════════════════
