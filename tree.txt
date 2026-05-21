@@ -1,0 +1,780 @@
+.
+├── support.html
+├── whitelist.html
+├── 3p-filters.html
+├── manifest.json
+├── document-blocked.html
+├── logger-ui.html
+├── no-dashboard.html
+├── dashboard.html
+├── 1p-filters.html
+├── managed_storage.json
+├── asset-viewer.html
+├── LICENSE.txt
+├── about.html
+├── cloud-ui.html
+├── background.html
+├── advanced-settings.html
+├── blank.html
+├── settings.html
+├── dyna-rules.html
+├── popup-fenix.html
+├── devtools.html
+├── code-viewer.html
+├── lib
+│   ├── punycode.js
+│   ├── diff
+│   │   ├── swatinem_diff.js
+│   │   ├── README.md
+│   ├── csstree
+│   │   ├── css-tree.js
+│   │   ├── LICENSE
+│   ├── regexanalyzer
+│   │   ├── regex.js
+│   │   ├── README.md
+│   │   ├── CHANGES.md
+│   ├── lz4
+│   │   ├── lz4-block-codec.wasm
+│   │   ├── lz4-block-codec.wat
+│   │   ├── lz4-block-codec-any.js
+│   │   ├── lz4-block-codec-wasm.js
+│   │   ├── lz4-block-codec-js.js
+│   │   ├── README.md
+│   ├── codemirror
+│   │   ├── README.md
+│   │   ├── LICENSE
+│   │   ├── lib
+│   │   │   ├── codemirror.js
+│   │   │   ├── codemirror.css
+│   │   ├── theme
+│   │   │   ├── night.css
+│   │   ├── mode
+│   │   │   ├── htmlmixed
+│   │   │   │   ├── htmlmixed.js
+│   │   │   ├── xml
+│   │   │   │   ├── xml.js
+│   │   │   ├── css
+│   │   │   │   ├── css.js
+│   │   │   ├── javascript
+│   │   │   │   ├── javascript.js
+│   │   ├── addon
+│   │   │   ├── hint
+│   │   │   │   ├── show-hint.css
+│   │   │   │   ├── show-hint.js
+│   │   │   ├── merge
+│   │   │   │   ├── merge.js
+│   │   │   │   ├── merge.css
+│   │   │   ├── comment
+│   │   │   │   ├── comment.js
+│   │   │   ├── display
+│   │   │   │   ├── panel.js
+│   │   │   ├── fold
+│   │   │   │   ├── foldgutter.css
+│   │   │   │   ├── foldcode.js
+│   │   │   │   ├── foldgutter.js
+│   │   │   ├── edit
+│   │   │   │   ├── matchbrackets.js
+│   │   │   │   ├── closebrackets.js
+│   │   │   ├── scroll
+│   │   │   │   ├── annotatescrollbar.js
+│   │   │   ├── selection
+│   │   │   │   ├── active-line.js
+│   │   │   ├── search
+│   │   │   │   ├── searchcursor.js
+│   │   │   │   ├── matchesonscrollbar.css
+│   ├── hsluv
+│   │   ├── README
+│   │   ├── LICENSE
+│   │   ├── hsluv-0.1.0.min.js
+│   ├── publicsuffixlist
+│   │   ├── publicsuffixlist.js
+│   │   ├── wasm
+│   │   │   ├── publicsuffixlist.wasm
+│   │   │   ├── README.md
+│   │   │   ├── publicsuffixlist.wat
+│   ├── js-beautify
+│   │   ├── README
+│   │   ├── beautifier.min.js
+│   │   ├── LICENSE
+├── img
+│   ├── icon_64.png
+│   ├── icon_16-loading.png
+│   ├── material-design.svg
+│   ├── icon_32-loading.png
+│   ├── photon.svg
+│   ├── ublock-defs.svg
+│   ├── cloud.png
+│   ├── icon_32-off.png
+│   ├── icon_32.png
+│   ├── help16.png
+│   ├── icon_64-off.png
+│   ├── icon_16.png
+│   ├── ublock.svg
+│   ├── icon_16-off.png
+│   ├── icon_64-loading.png
+│   ├── fontawesome
+│   │   ├── fontawesome-defs.svg
+│   │   ├── LICENSE.txt
+│   ├── flags-of-the-world
+│   │   ├── wf.png
+│   │   ├── zm.png
+│   │   ├── na.png
+│   │   ├── nu.png
+│   │   ├── tm.png
+│   │   ├── ad.png
+│   │   ├── yt.png
+│   │   ├── st.png
+│   │   ├── md.png
+│   │   ├── re.png
+│   │   ├── pa.png
+│   │   ├── README
+│   │   ├── gg.png
+│   │   ├── sh.png
+│   │   ├── bn.png
+│   │   ├── ng.png
+│   │   ├── be.png
+│   │   ├── er.png
+│   │   ├── bd.png
+│   │   ├── lu.png
+│   │   ├── la.png
+│   │   ├── pw.png
+│   │   ├── gm.png
+│   │   ├── dz.png
+│   │   ├── jo.png
+│   │   ├── gb.png
+│   │   ├── bf.png
+│   │   ├── mt.png
+│   │   ├── co.png
+│   │   ├── td.png
+│   │   ├── cf.png
+│   │   ├── gt.png
+│   │   ├── af.png
+│   │   ├── ls.png
+│   │   ├── fj.png
+│   │   ├── mm.png
+│   │   ├── ar.png
+│   │   ├── gq.png
+│   │   ├── gf.png
+│   │   ├── bj.png
+│   │   ├── lk.png
+│   │   ├── sd.png
+│   │   ├── gb-sct.png
+│   │   ├── je.png
+│   │   ├── gb-wls.png
+│   │   ├── ci.png
+│   │   ├── dm.png
+│   │   ├── as.png
+│   │   ├── pk.png
+│   │   ├── sy.png
+│   │   ├── hk.png
+│   │   ├── ms.png
+│   │   ├── hu.png
+│   │   ├── dk.png
+│   │   ├── tz.png
+│   │   ├── bm.png
+│   │   ├── om.png
+│   │   ├── pe.png
+│   │   ├── mq.png
+│   │   ├── vc.png
+│   │   ├── cc.png
+│   │   ├── sz.png
+│   │   ├── ps.png
+│   │   ├── mp.png
+│   │   ├── ec.png
+│   │   ├── pr.png
+│   │   ├── do.png
+│   │   ├── kr.png
+│   │   ├── sk.png
+│   │   ├── uy.png
+│   │   ├── rs.png
+│   │   ├── no.png
+│   │   ├── ni.png
+│   │   ├── cl.png
+│   │   ├── cd.png
+│   │   ├── nf.png
+│   │   ├── is.png
+│   │   ├── jp.png
+│   │   ├── sr.png
+│   │   ├── gb-eng.png
+│   │   ├── ug.png
+│   │   ├── pt.png
+│   │   ├── nl.png
+│   │   ├── cx.png
+│   │   ├── in.png
+│   │   ├── gu.png
+│   │   ├── io.png
+│   │   ├── aw.png
+│   │   ├── mx.png
+│   │   ├── jm.png
+│   │   ├── gw.png
+│   │   ├── rw.png
+│   │   ├── nz.png
+│   │   ├── bo.png
+│   │   ├── il.png
+│   │   ├── bg.png
+│   │   ├── eh.png
+│   │   ├── fr.png
+│   │   ├── ru.png
+│   │   ├── ly.png
+│   │   ├── au.png
+│   │   ├── sl.png
+│   │   ├── tl.png
+│   │   ├── kn.png
+│   │   ├── tg.png
+│   │   ├── bh.png
+│   │   ├── fo.png
+│   │   ├── cg.png
+│   │   ├── cr.png
+│   │   ├── mr.png
+│   │   ├── ro.png
+│   │   ├── tr.png
+│   │   ├── ph.png
+│   │   ├── bt.png
+│   │   ├── si.png
+│   │   ├── dj.png
+│   │   ├── ss.png
+│   │   ├── mh.png
+│   │   ├── aq.png
+│   │   ├── ml.png
+│   │   ├── az.png
+│   │   ├── to.png
+│   │   ├── ki.png
+│   │   ├── ca.png
+│   │   ├── gp.png
+│   │   ├── cw.png
+│   │   ├── tf.png
+│   │   ├── bi.png
+│   │   ├── tn.png
+│   │   ├── fi.png
+│   │   ├── ba.png
+│   │   ├── vg.png
+│   │   ├── lc.png
+│   │   ├── de.png
+│   │   ├── mo.png
+│   │   ├── sj.png
+│   │   ├── mu.png
+│   │   ├── so.png
+│   │   ├── mv.png
+│   │   ├── sx.png
+│   │   ├── ht.png
+│   │   ├── gr.png
+│   │   ├── fm.png
+│   │   ├── im.png
+│   │   ├── bv.png
+│   │   ├── se.png
+│   │   ├── kg.png
+│   │   ├── mz.png
+│   │   ├── um.png
+│   │   ├── tj.png
+│   │   ├── za.png
+│   │   ├── bs.png
+│   │   ├── kz.png
+│   │   ├── tc.png
+│   │   ├── ke.png
+│   │   ├── cn.png
+│   │   ├── ws.png
+│   │   ├── xk.png
+│   │   ├── ao.png
+│   │   ├── ky.png
+│   │   ├── gb-nir.png
+│   │   ├── gy.png
+│   │   ├── va.png
+│   │   ├── mf.png
+│   │   ├── ag.png
+│   │   ├── hn.png
+│   │   ├── al.png
+│   │   ├── mc.png
+│   │   ├── ua.png
+│   │   ├── ee.png
+│   │   ├── kp.png
+│   │   ├── ck.png
+│   │   ├── ve.png
+│   │   ├── tk.png
+│   │   ├── ax.png
+│   │   ├── ne.png
+│   │   ├── hm.png
+│   │   ├── mw.png
+│   │   ├── gl.png
+│   │   ├── ge.png
+│   │   ├── tt.png
+│   │   ├── tv.png
+│   │   ├── pl.png
+│   │   ├── cu.png
+│   │   ├── kw.png
+│   │   ├── gd.png
+│   │   ├── es.png
+│   │   ├── at.png
+│   │   ├── bb.png
+│   │   ├── ie.png
+│   │   ├── lr.png
+│   │   ├── sa.png
+│   │   ├── li.png
+│   │   ├── nc.png
+│   │   ├── zw.png
+│   │   ├── nr.png
+│   │   ├── vu.png
+│   │   ├── my.png
+│   │   ├── lv.png
+│   │   ├── ae.png
+│   │   ├── lb.png
+│   │   ├── mg.png
+│   │   ├── pg.png
+│   │   ├── pn.png
+│   │   ├── ir.png
+│   │   ├── iq.png
+│   │   ├── cy.png
+│   │   ├── pm.png
+│   │   ├── fk.png
+│   │   ├── ai.png
+│   │   ├── bw.png
+│   │   ├── hr.png
+│   │   ├── am.png
+│   │   ├── it.png
+│   │   ├── us.png
+│   │   ├── vi.png
+│   │   ├── eg.png
+│   │   ├── gh.png
+│   │   ├── gn.png
+│   │   ├── th.png
+│   │   ├── mk.png
+│   │   ├── uz.png
+│   │   ├── vn.png
+│   │   ├── et.png
+│   │   ├── mn.png
+│   │   ├── ga.png
+│   │   ├── gs.png
+│   │   ├── ye.png
+│   │   ├── br.png
+│   │   ├── kh.png
+│   │   ├── py.png
+│   │   ├── by.png
+│   │   ├── cv.png
+│   │   ├── bl.png
+│   │   ├── sm.png
+│   │   ├── gi.png
+│   │   ├── id.png
+│   │   ├── bz.png
+│   │   ├── np.png
+│   │   ├── ma.png
+│   │   ├── km.png
+│   │   ├── cm.png
+│   │   ├── sb.png
+│   │   ├── sg.png
+│   │   ├── ch.png
+│   │   ├── qa.png
+│   │   ├── sc.png
+│   │   ├── sv.png
+│   │   ├── lt.png
+│   │   ├── pf.png
+│   │   ├── sn.png
+│   │   ├── tw.png
+│   │   ├── me.png
+│   │   ├── cz.png
+│   │   ├── bq.png
+├── _locales
+│   ├── de
+│   │   ├── messages.json
+│   ├── bg
+│   │   ├── messages.json
+│   ├── nb
+│   │   ├── messages.json
+│   ├── hu
+│   │   ├── messages.json
+│   ├── ms
+│   │   ├── messages.json
+│   ├── ko
+│   │   ├── messages.json
+│   ├── cy
+│   │   ├── messages.json
+│   ├── et
+│   │   ├── messages.json
+│   ├── gu
+│   │   ├── messages.json
+│   ├── fi
+│   │   ├── messages.json
+│   ├── br_FR
+│   │   ├── messages.json
+│   ├── ca
+│   │   ├── messages.json
+│   ├── az
+│   │   ├── messages.json
+│   ├── lt
+│   │   ├── messages.json
+│   ├── pa
+│   │   ├── messages.json
+│   ├── bn
+│   │   ├── messages.json
+│   ├── pt_PT
+│   │   ├── messages.json
+│   ├── sq
+│   │   ├── messages.json
+│   ├── fr
+│   │   ├── messages.json
+│   ├── ka
+│   │   ├── messages.json
+│   ├── ur
+│   │   ├── messages.json
+│   ├── sw
+│   │   ├── messages.json
+│   ├── th
+│   │   ├── messages.json
+│   ├── mk
+│   │   ├── messages.json
+│   ├── zh_CN
+│   │   ├── messages.json
+│   ├── vi
+│   │   ├── messages.json
+│   ├── tr
+│   │   ├── messages.json
+│   ├── ja
+│   │   ├── messages.json
+│   ├── da
+│   │   ├── messages.json
+│   ├── he
+│   │   ├── messages.json
+│   ├── no
+│   │   ├── messages.json
+│   ├── fa
+│   │   ├── messages.json
+│   ├── kk
+│   │   ├── messages.json
+│   ├── lv
+│   │   ├── messages.json
+│   ├── te
+│   │   ├── messages.json
+│   ├── sv
+│   │   ├── messages.json
+│   ├── gl
+│   │   ├── messages.json
+│   ├── so
+│   │   ├── messages.json
+│   ├── mr
+│   │   ├── messages.json
+│   ├── en_GB
+│   │   ├── messages.json
+│   ├── ta
+│   │   ├── messages.json
+│   ├── hy
+│   │   ├── messages.json
+│   ├── oc
+│   │   ├── messages.json
+│   ├── uk
+│   │   ├── messages.json
+│   ├── cv
+│   │   ├── messages.json
+│   ├── en
+│   │   ├── messages.json
+│   ├── el
+│   │   ├── messages.json
+│   ├── kn
+│   │   ├── messages.json
+│   ├── sr
+│   │   ├── messages.json
+│   ├── be
+│   │   ├── messages.json
+│   ├── hi
+│   │   ├── messages.json
+│   ├── eu
+│   │   ├── messages.json
+│   ├── pt_BR
+│   │   ├── messages.json
+│   ├── ru
+│   │   ├── messages.json
+│   ├── it
+│   │   ├── messages.json
+│   ├── ar
+│   │   ├── messages.json
+│   ├── sl
+│   │   ├── messages.json
+│   ├── si
+│   │   ├── messages.json
+│   ├── ro
+│   │   ├── messages.json
+│   ├── nl
+│   │   ├── messages.json
+│   ├── cs
+│   │   ├── messages.json
+│   ├── sk
+│   │   ├── messages.json
+│   ├── ml
+│   │   ├── messages.json
+│   ├── fil
+│   │   ├── messages.json
+│   ├── zh_TW
+│   │   ├── messages.json
+│   ├── es
+│   │   ├── messages.json
+│   ├── hr
+│   │   ├── messages.json
+│   ├── fy
+│   │   ├── messages.json
+│   ├── bs
+│   │   ├── messages.json
+│   ├── id
+│   │   ├── messages.json
+│   ├── pl
+│   │   ├── messages.json
+│   ├── eo
+│   │   ├── messages.json
+├── assets
+│   ├── assets.json
+│   ├── thirdparties
+│   │   ├── publicsuffix.org
+│   │   │   ├── list
+│   │   │   │   ├── effective_tld_names.dat
+│   │   ├── urlhaus-filter
+│   │   │   ├── LICENSE.md
+│   │   │   ├── urlhaus-filter-online.txt
+│   │   ├── easylist
+│   │   │   ├── easyprivacy.txt
+│   │   │   ├── easylist.txt
+│   │   ├── pgl.yoyo.org
+│   │   │   ├── as
+│   │   │   │   ├── README.md
+│   │   │   │   ├── serverlist
+│   ├── ublock
+│   │   ├── badware.min.txt
+│   │   ├── privacy.min.txt
+│   │   ├── badlists.txt
+│   │   ├── unbreak.min.txt
+│   │   ├── filters.min.txt
+│   │   ├── quick-fixes.min.txt
+├── css
+│   ├── logger-ui.css
+│   ├── 1p-filters.css
+│   ├── support.css
+│   ├── popup-fenix.css
+│   ├── code-viewer.css
+│   ├── 3p-filters.css
+│   ├── asset-viewer.css
+│   ├── common.css
+│   ├── settings.css
+│   ├── cloud-ui.css
+│   ├── codemirror.css
+│   ├── dyna-rules.css
+│   ├── about.css
+│   ├── fa-icons.css
+│   ├── dashboard-common.css
+│   ├── document-blocked.css
+│   ├── logger-ui-inspector.css
+│   ├── dashboard.css
+│   ├── whitelist.css
+│   ├── dom-inspector.css
+│   ├── advanced-settings.css
+│   ├── devtools.css
+│   ├── epicker-ui.css
+│   ├── click2load.css
+│   ├── fonts
+│   │   ├── Inter
+│   │   │   ├── Inter-Regular.woff2
+│   │   │   ├── LICENSE.txt
+│   │   │   ├── Inter-SemiBold.woff2
+│   │   ├── Metropolis
+│   │   │   ├── Metropolis-SemiBold.woff2
+│   │   │   ├── Metropolis-Regular.woff2
+│   │   │   ├── README.md
+│   │   │   ├── UNLICENSE
+│   ├── themes
+│   │   ├── default.css
+├── web_accessible_resources
+│   ├── googletagservices_gpt.js
+│   ├── outbrain-widget.js
+│   ├── hd-main.js
+│   ├── noop-1s.mp4
+│   ├── noeval.js
+│   ├── fingerprint2.js
+│   ├── googlesyndication_adsbygoogle.js
+│   ├── google-analytics_analytics.js
+│   ├── README.txt
+│   ├── googletagmanager_gtm.js
+│   ├── empty
+│   ├── prebid-ads.js
+│   ├── chartbeat.js
+│   ├── noop-vast3.xml
+│   ├── noop.html
+│   ├── popads-dummy.js
+│   ├── doubleclick_instream_ad_status.js
+│   ├── google-ima.js
+│   ├── noop.txt
+│   ├── dom-inspector.html
+│   ├── nofab.js
+│   ├── click2load.html
+│   ├── google-analytics_cx_api.js
+│   ├── popads.js
+│   ├── fingerprint3.js
+│   ├── google-analytics_ga.js
+│   ├── amazon_ads.js
+│   ├── noop.css
+│   ├── noeval-silent.js
+│   ├── nitropay_ads.js
+│   ├── nobab.js
+│   ├── noop-0.5s.mp3
+│   ├── noop-0.1s.mp3
+│   ├── amazon_apstag.js
+│   ├── google-analytics_inpage_linkid.js
+│   ├── scorecardresearch_beacon.js
+│   ├── nobab2.js
+│   ├── adthrive_abd.js
+│   ├── epicker-ui.html
+│   ├── 2x2.png
+│   ├── 3x2.png
+│   ├── noop-vast4.xml
+│   ├── noop-vast2.xml
+│   ├── 32x32.png
+│   ├── noop-vmap1.xml
+│   ├── noop.js
+│   ├── noop.json
+│   ├── 1x1.gif
+│   ├── sensors-analytics.js
+│   ├── ampproject_v0.js
+├── js
+│   ├── cosmetic-filtering.js
+│   ├── i18n.js
+│   ├── traffic.js
+│   ├── static-net-filtering.js
+│   ├── url-net-filtering.js
+│   ├── static-filtering-io.js
+│   ├── lz4.js
+│   ├── scriptlet-filtering-core.js
+│   ├── logger-ui.js
+│   ├── advanced-settings.js
+│   ├── messaging.js
+│   ├── hntrie.js
+│   ├── utils.js
+│   ├── biditrie.js
+│   ├── static-ext-filtering-db.js
+│   ├── cloud-ui.js
+│   ├── commands.js
+│   ├── 3p-filters.js
+│   ├── settings.js
+│   ├── jsonpath.js
+│   ├── base64-custom.js
+│   ├── vapi-client.js
+│   ├── logger.js
+│   ├── dynamic-net-filtering.js
+│   ├── vapi-background.js
+│   ├── diff-updater.js
+│   ├── console.js
+│   ├── popup-fenix.js
+│   ├── arglist-parser.js
+│   ├── vapi.js
+│   ├── whitelist.js
+│   ├── html-filtering.js
+│   ├── support.js
+│   ├── click2load.js
+│   ├── pagestore.js
+│   ├── broadcast.js
+│   ├── redirect-resources.js
+│   ├── devtools.js
+│   ├── epicker-ui.js
+│   ├── filtering-engines.js
+│   ├── 1p-filters.js
+│   ├── dyna-rules.js
+│   ├── reverselookup.js
+│   ├── static-ext-filtering.js
+│   ├── dashboard-common.js
+│   ├── contentscript-extra.js
+│   ├── redirect-engine.js
+│   ├── static-filtering-parser.js
+│   ├── fa-icons.js
+│   ├── theme.js
+│   ├── vapi-background-ext.js
+│   ├── regex-analyzer.js
+│   ├── dashboard.js
+│   ├── urlskip.js
+│   ├── uri-utils.js
+│   ├── static-dnr-filtering.js
+│   ├── tasks.js
+│   ├── text-utils.js
+│   ├── cachestorage.js
+│   ├── benchmarks.js
+│   ├── dom.js
+│   ├── logger-ui-inspector.js
+│   ├── asset-viewer.js
+│   ├── reverselookup-worker.js
+│   ├── assets.js
+│   ├── background.js
+│   ├── tab.js
+│   ├── webext.js
+│   ├── s14e-serializer.js
+│   ├── text-encode.js
+│   ├── dom-inspector.js
+│   ├── contextmenu.js
+│   ├── httpheader-filtering.js
+│   ├── code-viewer.js
+│   ├── contentscript.js
+│   ├── document-blocked.js
+│   ├── mrucache.js
+│   ├── vapi-common.js
+│   ├── hnswitches.js
+│   ├── about.js
+│   ├── filtering-context.js
+│   ├── scriptlet-filtering.js
+│   ├── storage.js
+│   ├── ublock.js
+│   ├── start.js
+│   ├── wasm
+│   │   ├── biditrie.wasm
+│   │   ├── hntrie.wat
+│   │   ├── README.md
+│   │   ├── biditrie.wat
+│   │   ├── hntrie.wasm
+│   ├── scriptlets
+│   │   ├── epicker.js
+│   │   ├── should-inject-contentscript.js
+│   │   ├── load-large-media-interactive.js
+│   │   ├── noscript-spoof.js
+│   │   ├── dom-survey-scripts.js
+│   │   ├── load-large-media-all.js
+│   │   ├── load-3p-css.js
+│   │   ├── scriptlet-loglevel-1.js
+│   │   ├── cosmetic-report.js
+│   │   ├── updater.js
+│   │   ├── cosmetic-on.js
+│   │   ├── scriptlet-loglevel-2.js
+│   │   ├── subscriber.js
+│   │   ├── cosmetic-off.js
+│   │   ├── dom-inspector.js
+│   │   ├── dom-survey-elements.js
+│   │   ├── cosmetic-logger.js
+│   ├── codemirror
+│   │   ├── search-thread.js
+│   │   ├── ubo-dynamic-filtering.js
+│   │   ├── search.js
+│   │   ├── ubo-static-filtering.js
+│   ├── resources
+│   │   ├── scriptlets.js
+│   │   ├── noeval.js
+│   │   ├── href-sanitizer.js
+│   │   ├── prevent-innerHTML.js
+│   │   ├── utils.js
+│   │   ├── prevent-settimeout.js
+│   │   ├── attribute.js
+│   │   ├── cookie.js
+│   │   ├── prevent-dialog.js
+│   │   ├── prevent-addeventlistener.js
+│   │   ├── json-prune.js
+│   │   ├── object-prune.js
+│   │   ├── stack-trace.js
+│   │   ├── set-constant.js
+│   │   ├── safe-self.js
+│   │   ├── run-at.js
+│   │   ├── prevent-xhr.js
+│   │   ├── localstorage.js
+│   │   ├── replace-argument.js
+│   │   ├── prevent-fetch.js
+│   │   ├── base.js
+│   │   ├── spoof-css.js
+│   │   ├── shared.js
+│   │   ├── json-edit.js
+│   │   ├── parse-replace.js
+│   │   ├── create-html.js
+│   │   ├── proxy-apply.js
+├── mozilla-recommendation.json
+├── META-INF
+│   ├── cose.manifest
+│   ├── cose.sig
+│   ├── manifest.mf
+│   ├── mozilla.sf
+│   ├── mozilla.rsa
+├── tree.txt
