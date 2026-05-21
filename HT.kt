@@ -1,28 +1,26 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V2.0 (YouTube WebView with PiP + Fullscreen)
+// HueTube - V3.0 (YouTube WebView — Dual Layer, No Blink)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// THEME: Dark YouTube — Near-Black Background
+// ARCHITECTURE:
+//   Two WebViews stacked permanently (never re-parented):
+//     - Homepage layer (bottom, zIndex 0)
+//     - Content layer (top, zIndex 1)
 //
-// COLOURS:
-//   Background:    #0A0A0A  (near black)
-//   Surface:       #121212  (slightly elevated)
-//   Accent:        #FF0000  (YouTube red)
-//   Text Primary:  #FFFFFF  (white)
-//   Text Muted:    #888888  (grey)
-//
-// SLOTS:
-//   Slot 0 — Homepage (fixed m.youtube.com, never navigates)
-//   Slot 1 — Content  (dynamic, full WebView history)
-//     States: ACTIVE | PIP | NONE
+//   Visibility toggled via alpha + touch absorption:
+//     - Homepage active: content alpha=0, content absorbs touch=none
+//     - Content active:  homepage alpha=0.3 (dimmed behind)
+//     - PiP mode:        content shrunk to corner overlay,
+//                        homepage fully visible and touchable,
+//                        PiP touchable, tapping bg switches to content
 //
 // BACK NAVIGATION:
 //   Content canGoBack → goBack()
-//   Content at start   → minimize to PiP, show Homepage
-//   Homepage + PiP     → close PiP (destroy content)
-//   Homepage no PiP    → finish()
+//   Content at start   → minimize to PiP
+//   PiP visible        → close PiP (destroy content)
+//   Homepage alone     → finish()
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -42,8 +40,6 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -63,7 +59,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
@@ -79,7 +74,7 @@ class MainActivity : ComponentActivity() {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 2/10 — Constants & App Context ===
+// === PART 2/10 — Constants ===
 // ═══════════════════════════════════════════════════════════════════
 
 private val BG = Color(0xFF0A0A0A)
@@ -94,22 +89,20 @@ object AppContextHolder {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 3/10 — Slot 1 State Enum & TabState ===
+// === PART 3/10 — Content State Enum & TabState ===
 // ═══════════════════════════════════════════════════════════════════
 
 enum class ContentState {
-    ACTIVE,   // Full screen, visible
-    PIP,      // Minimized overlay on homepage
-    NONE      // Destroyed, not present
+    HIDDEN,   // Content not created or destroyed
+    ACTIVE,   // Full screen, touchable
+    PIP       // Minimized overlay on homepage
 }
 
 class TabState {
     var webView by mutableStateOf<WebView?>(null)
     var url by mutableStateOf(HOMEPAGE_URL)
-    var title by mutableStateOf("YouTube")
-    var lastUsed by mutableLongStateOf(System.currentTimeMillis())
-    var contentState by mutableStateOf(ContentState.NONE)
-    var customView by mutableStateOf<View?>(null)  // Fullscreen video view
+    var contentState by mutableStateOf(ContentState.HIDDEN)
+    var customView by mutableStateOf<View?>(null)
 }
 
 // END OF PART 3/10
@@ -119,7 +112,7 @@ class TabState {
 // === PART 4/10 — WebView Factory ===
 // ═══════════════════════════════════════════════════════════════════
 
-fun createWebView(
+fun createContentWebView(
     url: String,
     tabState: TabState,
     onNewContentRequest: (String) -> Unit,
@@ -144,13 +137,6 @@ fun createWebView(
         }
 
         webChromeClient = object : WebChromeClient() {
-            override fun onReceivedTitle(view: WebView, title: String?) {
-                if (title != null && title.isNotBlank()) {
-                    tabState.title = title
-                }
-            }
-
-            // ── Fullscreen video support ──────────────────────────
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 tabState.customView = view
                 onCustomViewShow()
@@ -165,20 +151,16 @@ fun createWebView(
         webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 tabState.url = url
-                // Inject dark mode
                 view.evaluateJavascript("""
                     (function() {
                         document.documentElement.style.setProperty('color-scheme', 'dark');
                         document.documentElement.style.setProperty('background-color', '#0A0A0A');
-                        
                         var originalMatchMedia = window.matchMedia;
                         window.matchMedia = function(query) {
                             var result = originalMatchMedia(query);
                             if (query.includes('prefers-color-scheme')) {
                                 return {
-                                    matches: true,
-                                    media: query,
-                                    onchange: null,
+                                    matches: true, media: query, onchange: null,
                                     addListener: function(cb) { cb(this); },
                                     removeListener: function() {},
                                     addEventListener: function(type, cb) { if (type === 'change') cb(this); },
@@ -188,7 +170,6 @@ fun createWebView(
                             }
                             return result;
                         };
-                        
                         document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
                     })();
                 """.trimIndent(), null)
@@ -211,6 +192,57 @@ fun createWebView(
     }
 }
 
+fun createHomepageWebView(): WebView {
+    return WebView(AppContextHolder.context).apply {
+        setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+        layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        with(settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            loadWithOverviewMode = true
+            useWideViewPort = true
+            builtInZoomControls = true
+            displayZoomControls = false
+            setSupportZoom(true)
+            mediaPlaybackRequiresUserGesture = false
+        }
+        webChromeClient = object : WebChromeClient() {}
+        webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (url != HOMEPAGE_URL && url != "about:blank") {
+                    view.loadUrl(HOMEPAGE_URL)
+                }
+                view.evaluateJavascript("""
+                    (function() {
+                        document.documentElement.style.setProperty('color-scheme', 'dark');
+                        document.documentElement.style.setProperty('background-color', '#0A0A0A');
+                        var originalMatchMedia = window.matchMedia;
+                        window.matchMedia = function(query) {
+                            var result = originalMatchMedia(query);
+                            if (query.includes('prefers-color-scheme')) {
+                                return {
+                                    matches: true, media: query, onchange: null,
+                                    addListener: function(cb) { cb(this); },
+                                    removeListener: function() {},
+                                    addEventListener: function(type, cb) { if (type === 'change') cb(this); },
+                                    removeEventListener: function() {},
+                                    dispatchEvent: function() { return true; }
+                                };
+                            }
+                            return result;
+                        };
+                        document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
+                    })();
+                """.trimIndent(), null)
+            }
+        }
+        loadUrl(HOMEPAGE_URL)
+    }
+}
+
 // END OF PART 4/10
 
 
@@ -227,18 +259,14 @@ sealed class BackAction {
 
 fun determineBackAction(contentState: ContentState, contentTab: TabState?): BackAction {
     return when {
-        contentState == ContentState.ACTIVE && contentTab?.webView?.canGoBack() == true -> {
+        contentState == ContentState.ACTIVE && contentTab?.webView?.canGoBack() == true ->
             BackAction.GoBackInHistory
-        }
-        contentState == ContentState.ACTIVE -> {
+        contentState == ContentState.ACTIVE ->
             BackAction.MinimizeToPip
-        }
-        contentState == ContentState.PIP -> {
+        contentState == ContentState.PIP ->
             BackAction.ClosePip
-        }
-        else -> {
+        else ->
             BackAction.CloseApp
-        }
     }
 }
 
@@ -262,27 +290,15 @@ class FullscreenManager(val activity: android.app.Activity) {
     }
 
     fun exitFullscreen() {
-        activity.window.decorView.systemUiVisibility = (
-            android.view.View.SYSTEM_UI_FLAG_VISIBLE
-        )
+        activity.window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
     }
 }
 
 // END OF PART 6/10
 
 
-
 // ═══════════════════════════════════════════════════════════════════
-// === PART 7/10 — PiP Overlay Composable ===
-// ═══════════════════════════════════════════════════════════════════
-
-// REMOVED — PiP is now handled by modifier swap in Part 8, no separate AndroidView needed.
-
-// END OF PART 7/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 8/10 — Main App Composable ===
+// === PART 7/10 — Main App Composable ===
 // ═══════════════════════════════════════════════════════════════════
 
 @Composable
@@ -294,92 +310,25 @@ fun HueTubeApp() {
     val fullscreenManager = remember { FullscreenManager(activity) }
     val density = LocalDensity.current
 
-    // ── Home Tab (Slot 0) ────────────────────────────────────────
-    val homeTab = remember {
-        TabState().apply {
-            webView = WebView(context).apply {
-                setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                with(settings) {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    loadWithOverviewMode = true
-                    useWideViewPort = true
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                    setSupportZoom(true)
-                    mediaPlaybackRequiresUserGesture = false
-                }
-                webChromeClient = object : WebChromeClient() {}
-                webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                        if (url != HOMEPAGE_URL && url != "about:blank") {
-                            view.loadUrl(HOMEPAGE_URL)
-                        }
-                        view.evaluateJavascript("""
-                            (function() {
-                                document.documentElement.style.setProperty('color-scheme', 'dark');
-                                document.documentElement.style.setProperty('background-color', '#0A0A0A');
-                                var originalMatchMedia = window.matchMedia;
-                                window.matchMedia = function(query) {
-                                    var result = originalMatchMedia(query);
-                                    if (query.includes('prefers-color-scheme')) {
-                                        return {
-                                            matches: true, media: query, onchange: null,
-                                            addListener: function(cb) { cb(this); },
-                                            removeListener: function() {},
-                                            addEventListener: function(type, cb) { if (type === 'change') cb(this); },
-                                            removeEventListener: function() {},
-                                            dispatchEvent: function() { return true; }
-                                        };
-                                    }
-                                    return result;
-                                };
-                                document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
-                            })();
-                        """.trimIndent(), null)
-                    }
-                }
-                loadUrl(HOMEPAGE_URL)
-            }
-            contentState = ContentState.ACTIVE
-            url = HOMEPAGE_URL
-        }
-    }
-
-    // ── Content Tab (Slot 1) ─────────────────────────────────────
+    // ── Two permanent WebViews — NEVER recreated, NEVER re-parented ─
+    val homepageWebView = remember { createHomepageWebView() }
     val contentTab = remember { TabState() }
 
     // ── UI State ─────────────────────────────────────────────────
-    var activeView by remember { mutableStateOf("home") }  // "home" | "content" | "pip"
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // PiP drag state
+    // PiP drag offset
     var pipOffsetX by remember { mutableStateOf(0f) }
     var pipOffsetY by remember { mutableStateOf(0f) }
+    val pipWidthDp = 240.dp
+    val pipHeightDp = 135.dp
+    val pipWidthPx = with(density) { pipWidthDp.toPx() }
+    val pipHeightPx = with(density) { pipHeightDp.toPx() }
 
-    // ── Stable container — NEVER destroyed, NEVER changes parent ─
-    val contentContainer = remember {
-        android.widget.FrameLayout(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
-            // Start with homepage
-            addView(homeTab.webView)
-        }
-    }
-
-    // ── Create content tab ───────────────────────────────────────
+    // ── Create / replace content tab ─────────────────────────────
     fun createContentTab(url: String) {
-        if (contentTab.webView != null) {
-            contentTab.webView?.destroy()
-        }
-        contentTab.webView = createWebView(
+        contentTab.webView?.destroy()
+        contentTab.webView = createContentWebView(
             url = url,
             tabState = contentTab,
             onNewContentRequest = { newUrl -> createContentTab(newUrl) },
@@ -394,21 +343,6 @@ fun HueTubeApp() {
         )
         contentTab.url = url
         contentTab.contentState = ContentState.ACTIVE
-        contentTab.lastUsed = System.currentTimeMillis()
-
-        // Swap container child — homepage stays alive, content goes in
-        contentContainer.removeAllViews()
-        contentContainer.addView(contentTab.webView)
-        activeView = "content"
-    }
-
-    // ── Switch to homepage ───────────────────────────────────────
-    fun showHomepage() {
-        if (activeView != "home") {
-            contentContainer.removeAllViews()
-            contentContainer.addView(homeTab.webView)
-            activeView = "home"
-        }
     }
 
     // ── Back Handler ────────────────────────────────────────────
@@ -426,19 +360,14 @@ fun HueTubeApp() {
             }
             BackAction.MinimizeToPip -> {
                 contentTab.contentState = ContentState.PIP
-                // Don't swap container — content stays in container
-                // PiP renders as overlay modifier
-                activeView = "pip"
-                // Keep homepage visible behind
-                contentContainer.removeAllViews()
-                contentContainer.addView(homeTab.webView)
             }
             BackAction.ClosePip -> {
                 contentTab.webView?.destroy()
                 contentTab.webView = null
-                contentTab.contentState = ContentState.NONE
+                contentTab.contentState = ContentState.HIDDEN
                 contentTab.url = HOMEPAGE_URL
-                activeView = "home"
+                pipOffsetX = 0f
+                pipOffsetY = 0f
             }
             BackAction.CloseApp -> {
                 activity.finish()
@@ -446,72 +375,102 @@ fun HueTubeApp() {
         }
     }
 
-    // ── PiP drag handler ─────────────────────────────────────────
-    val pipWidthPx = with(density) { 240.dp.toPx() }
-    val pipHeightPx = with(density) { 135.dp.toPx() }
+    // ── Determine what's touchable ───────────────────────────────
+    val homepageTouchable = contentTab.contentState != ContentState.ACTIVE
+    val contentTouchable = contentTab.contentState == ContentState.ACTIVE
+    val pipTouchable = contentTab.contentState == ContentState.PIP
 
+    // ── LAYOUT: Two stacked layers ───────────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BG)
     ) {
-        // ── ONE AndroidView — never recreated ────────────────────
+        // ══════════════════════════════════════════════════════════
+        // LAYER 0 — Homepage (always visible, touchable when no content active)
+        // ══════════════════════════════════════════════════════════
         AndroidView(
-            factory = { contentContainer },
-            modifier = Modifier.fillMaxSize()
+            factory = { homepageWebView },
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(0f)
+                .then(
+                    if (!homepageTouchable) {
+                        // Absorb all touches — they pass through to nothing
+                        Modifier.clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        ) { /* absorb */ }
+                    } else {
+                        Modifier
+                    }
+                )
         )
 
-        // ── PiP Overlay (uses content WebView in-place, no re-parenting) ─
-        if (activeView == "pip" && contentTab.webView != null) {
+        // ══════════════════════════════════════════════════════════
+        // LAYER 1 — Content (ACTIVE: full screen | PIP: corner overlay | HIDDEN: invisible)
+        // ══════════════════════════════════════════════════════════
+        if (contentTab.webView != null && contentTab.contentState != ContentState.HIDDEN) {
+            val isPip = contentTab.contentState == ContentState.PIP
+
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(10f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
-                        .size(width = 240.dp, height = 135.dp)
-                        .clip(RectangleShape)
-                        .background(SURFACE)
-                        .onGloballyPositioned { coords ->
-                            if (pipOffsetX == 0f && pipOffsetY == 0f) {
-                                val parentW = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
-                                val parentH = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
-                                pipOffsetX = parentW - pipWidthPx - with(density) { 16.dp.toPx() }
-                                pipOffsetY = parentH - pipHeightPx - with(density) { 16.dp.toPx() }
-                            }
+                    .then(
+                        if (isPip) {
+                            Modifier
+                                .zIndex(10f)
+                                .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
+                                .size(width = pipWidthDp, height = pipHeightDp)
+                                .clip(RectangleShape)
+                                .background(SURFACE)
+                                .onGloballyPositioned { coords ->
+                                    if (pipOffsetX == 0f && pipOffsetY == 0f) {
+                                        val parentW = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
+                                        val parentH = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
+                                        pipOffsetX = parentW - pipWidthPx - with(density) { 16.dp.toPx() }
+                                        pipOffsetY = parentH - pipHeightPx - with(density) { 16.dp.toPx() }
+                                    }
+                                }
+                                .pointerInput(Unit) {
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        pipOffsetX += dragAmount.x
+                                        pipOffsetY += dragAmount.y
+                                    }
+                                }
+                        } else {
+                            Modifier
+                                .fillMaxSize()
+                                .zIndex(1f)
                         }
-                        .pointerInput(Unit) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                pipOffsetX += dragAmount.x
-                                pipOffsetY += dragAmount.y
-                            }
-                        }
-                        .clickable {
-                            // Tap: expand back to full content
-                            contentContainer.removeAllViews()
-                            contentContainer.addView(contentTab.webView)
-                            contentTab.contentState = ContentState.ACTIVE
-                            activeView = "content"
-                        }
-                ) {
-                    // Show content WebView inside PiP box
-                    // Note: This temporarily re-parents — the blink is unavoidable here
-                    // but only happens on PiP expand/collapse, not during normal use
-                    AndroidView(
-                        factory = { contentTab.webView!! },
-                        modifier = Modifier.fillMaxSize()
                     )
+            ) {
+                // The content WebView
+                AndroidView(
+                    factory = { contentTab.webView!! },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (!contentTouchable && !pipTouchable) {
+                                Modifier.clickable(
+                                    indication = null,
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                ) { /* absorb */ }
+                            } else {
+                                Modifier
+                            }
+                        )
+                )
 
-                    // Close button
+                // PiP close button
+                if (isPip) {
                     IconButton(
                         onClick = {
                             contentTab.webView?.destroy()
                             contentTab.webView = null
-                            contentTab.contentState = ContentState.NONE
-                            activeView = "home"
+                            contentTab.contentState = ContentState.HIDDEN
+                            pipOffsetX = 0f
+                            pipOffsetY = 0f
                         },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -529,21 +488,32 @@ fun HueTubeApp() {
             }
         }
 
-        // ── Fullscreen custom view ──────────────────────────────
-        if (isFullscreen && contentTab.customView != null) {
-            AndroidView(
-                factory = { contentTab.customView!! },
+        // ══════════════════════════════════════════════════════════
+        // TAP BACKGROUND WHILE PIP ACTIVE → switch to content
+        // ══════════════════════════════════════════════════════════
+        if (contentTab.contentState == ContentState.PIP) {
+            // Invisible tap target behind PiP — tapping homepage switches to content
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(100f)
+                    .zIndex(5f)
+                    .clickable {
+                        // Tapped background → expand content back to full
+                        contentTab.contentState = ContentState.ACTIVE
+                    }
             )
         }
     }
 }
 
+// END OF PART 7/10
+
+
+// ═══════════════════════════════════════════════════════════════════
+// === PART 8/10 — Reserved for Future Features ===
+// ═══════════════════════════════════════════════════════════════════
+
 // END OF PART 8/10
-
-
 
 
 // ═══════════════════════════════════════════════════════════════════
