@@ -1,27 +1,28 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V5.0 (YouTube WebView — Banner Miniplayer)
+// HueTube - V6.0 (Single Container Tab Switching — No Blink)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Architecture ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// Two WebViews stacked in a permanent FrameLayout container:
-//   - Homepage (always exists, m.youtube.com locked)
-//   - Content  (created on link tap, holds video/playback)
+// Two WebViews, one container — only ONE visible at a time.
+// The hidden WebView is detached from the view hierarchy but kept
+// alive in memory so audio/video keeps playing.
 //
 // States:
-//   HIDDEN  — homepage only, no content
-//   ACTIVE  — content fullscreen
-//   BANNER  — homepage visible, content playing behind, banner overlay
+//   HIDDEN  — Tab 0 (homepage) in container, Tab 1 destroyed
+//   ACTIVE  — Tab 1 (content) in container, Tab 0 detached alive
+//   BANNER  — Tab 0 in container, Tab 1 detached alive (playing)
+//             Banner overlay at bottom shows title + close button
 //
-// Container stacking (no blinking — container never changes parent):
-//   ACTIVE:  [contentWebView]
-//   BANNER:  [contentWebView, homepageWebView]  (homepage on top)
-//   HIDDEN:  [homepageWebView]
+// Banner interactions:
+//   Tap banner → switch to ACTIVE (Tab 1 back in container)
+//   Tap X      → destroy Tab 1, go to HIDDEN
+//   Tap link   → destroy old Tab 1, create new, go to ACTIVE
 //
 // Back navigation:
 //   ACTIVE + canGoBack → goBack()
 //   ACTIVE + no history → BANNER
-//   BANNER              → destroy content, HIDDEN
+//   BANNER              → destroy Tab 1, HIDDEN
 //   HIDDEN              → exit app
 //
 // ═══════════════════════════════════════════════════════════════════
@@ -80,8 +81,6 @@ class MainActivity : ComponentActivity() {
 // ═══════════════════════════════════════════════════════════════════
 
 private const val HOMEPAGE_URL = "https://m.youtube.com"
-private val BG = Color(0xFF0A0A0A)
-private val SURFACE = Color(0xFF121212)
 private val BANNER_BG = Color(0xFF1A1A1A)
 private val ACCENT = Color(0xFFFF0000)
 
@@ -93,9 +92,9 @@ private val ACCENT = Color(0xFFFF0000)
 // ═══════════════════════════════════════════════════════════════════
 
 enum class ContentState {
-    HIDDEN,
-    ACTIVE,
-    BANNER
+    HIDDEN,   // Tab 0 visible, Tab 1 destroyed
+    ACTIVE,   // Tab 1 visible, Tab 0 detached alive
+    BANNER    // Tab 0 visible + banner, Tab 1 detached alive (playing)
 }
 
 // END OF PART 3/10
@@ -333,7 +332,7 @@ fun PlayingBanner(
                 modifier = Modifier.weight(1f)
             )
 
-            // Close button
+            // Close button — destroys the content tab
             IconButton(
                 onClick = onClose,
                 modifier = Modifier.size(28.dp)
@@ -367,7 +366,7 @@ fun HueTubeApp() {
     var contentTitle by remember { mutableStateOf("") }
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // ── Permanent container — NEVER recreated ────────────────────
+    // ── Permanent container — NEVER recreated by Compose ─────────
     val container = remember {
         FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -378,24 +377,30 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Homepage WebView — permanent ─────────────────────────────
+    // ── Tab 0 (Homepage) — permanent, never destroyed ────────────
     val homepageWebView = remember { createHomepageWebView(context) }
 
-    // ── Content WebView reference ────────────────────────────────
+    // ── Tab 1 (Content) — created/destroyed as needed ────────────
     var contentWebView by remember { mutableStateOf<WebView?>(null) }
 
-    // ── Initialize: homepage in container ────────────────────────
+    // ── Initialize: Tab 0 in container ───────────────────────────
     LaunchedEffect(Unit) {
         container.addView(homepageWebView)
     }
 
-    // ── Create content ───────────────────────────────────────────
-    fun createContent(url: String) {
-        // Destroy old
-        contentWebView?.let {
-            container.removeView(it)
-            it.destroy()
+    // ── Switch container to show a specific WebView ──────────────
+    fun switchTo(target: WebView) {
+        if (container.childCount == 0 || container.getChildAt(0) != target) {
+            container.removeAllViews()
+            container.addView(target)
         }
+    }
+
+    // ── Create Tab 1 (content) ───────────────────────────────────
+    fun createContent(url: String) {
+        // Destroy old Tab 1 if exists
+        contentWebView?.destroy()
+        contentWebView = null
 
         val wv = createContentWebView(
             context = context,
@@ -414,31 +419,23 @@ fun HueTubeApp() {
         contentWebView = wv
         contentTitle = ""
 
-        // Remove homepage, add content
-        container.removeView(homepageWebView)
-        container.addView(wv)
+        // Show Tab 1 in container, Tab 0 stays alive detached
+        switchTo(wv)
         contentState = ContentState.ACTIVE
     }
 
-    // ── Show banner (homepage on top, content behind) ────────────
+    // ── Show banner: Tab 0 in container, Tab 1 detached alive ────
     fun showBanner() {
-        if (contentWebView != null && container.indexOfChild(homepageWebView) == -1) {
-            container.addView(homepageWebView)
-        }
+        switchTo(homepageWebView)
         contentState = ContentState.BANNER
     }
 
-    // ── Destroy content ──────────────────────────────────────────
+    // ── Destroy Tab 1 completely ─────────────────────────────────
     fun destroyContent() {
-        contentWebView?.let {
-            container.removeView(it)
-            it.destroy()
-        }
+        contentWebView?.destroy()
         contentWebView = null
         contentTitle = ""
-        if (container.indexOfChild(homepageWebView) == -1) {
-            container.addView(homepageWebView)
-        }
+        switchTo(homepageWebView)
         contentState = ContentState.HIDDEN
     }
 
@@ -462,13 +459,13 @@ fun HueTubeApp() {
 
     // ── Layout ───────────────────────────────────────────────────
     Box(modifier = Modifier.fillMaxSize()) {
-        // ONE AndroidView — never recreated
+        // ONE AndroidView — factory runs ONCE, container never recreated
         AndroidView(
             factory = { container },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Banner overlay at bottom
+        // Banner overlay at bottom (pure Compose, no WebView)
         if (contentState == ContentState.BANNER) {
             Box(
                 modifier = Modifier
@@ -478,11 +475,12 @@ fun HueTubeApp() {
                 PlayingBanner(
                     title = contentTitle,
                     onTap = {
-                        // Switch back to content
-                        container.removeView(homepageWebView)
+                        // Switch back to Tab 1
+                        contentWebView?.let { switchTo(it) }
                         contentState = ContentState.ACTIVE
                     },
                     onClose = {
+                        // Close button: destroy Tab 1 completely
                         destroyContent()
                     }
                 )
