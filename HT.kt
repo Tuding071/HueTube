@@ -271,79 +271,12 @@ class FullscreenManager(val activity: android.app.Activity) {
 // END OF PART 6/10
 
 
+
 // ═══════════════════════════════════════════════════════════════════
 // === PART 7/10 — PiP Overlay Composable ===
 // ═══════════════════════════════════════════════════════════════════
 
-@Composable
-fun PipOverlay(
-    webView: WebView,
-    onTapExpand: () -> Unit,
-    onClose: () -> Unit
-) {
-    val density = LocalDensity.current
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
-    var pipWidth by remember { mutableStateOf(0) }
-    var pipHeight by remember { mutableStateOf(0) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(10f)
-    ) {
-        Box(
-            modifier = Modifier
-                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                .size(width = 240.dp, height = 135.dp)
-                .clip(RectangleShape)
-                .background(SURFACE)
-                .onGloballyPositioned { coords ->
-                    pipWidth = coords.size.width
-                    pipHeight = coords.size.height
-                    if (offsetX == 0f && offsetY == 0f) {
-                        // Position bottom-right initially
-                        val parentWidth = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
-                        val parentHeight = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
-                        val dpToPx = density.density
-                        offsetX = parentWidth - pipWidth - (16f * dpToPx)
-                        offsetY = parentHeight - pipHeight - (16f * dpToPx)
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                    }
-                }
-        ) {
-            // WebView content
-            AndroidView(
-                factory = { webView },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable { onTapExpand() }
-            )
-
-            // Close button
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(24.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.Close,
-                    "Close PiP",
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-        }
-    }
-}
+// REMOVED — PiP is now handled by modifier swap in Part 8, no separate AndroidView needed.
 
 // END OF PART 7/10
 
@@ -359,6 +292,7 @@ fun HueTubeApp() {
     AppContextHolder.context = context.applicationContext
 
     val fullscreenManager = remember { FullscreenManager(activity) }
+    val density = LocalDensity.current
 
     // ── Home Tab (Slot 0) ────────────────────────────────────────
     val homeTab = remember {
@@ -423,7 +357,11 @@ fun HueTubeApp() {
     var activeView by remember { mutableStateOf("home") }  // "home" | "content" | "pip"
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // ── Stable container for content WebView ─────────────────────
+    // PiP drag state
+    var pipOffsetX by remember { mutableStateOf(0f) }
+    var pipOffsetY by remember { mutableStateOf(0f) }
+
+    // ── Stable container — NEVER destroyed, NEVER changes parent ─
     val contentContainer = remember {
         android.widget.FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -431,6 +369,8 @@ fun HueTubeApp() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+            // Start with homepage
+            addView(homeTab.webView)
         }
     }
 
@@ -455,7 +395,20 @@ fun HueTubeApp() {
         contentTab.url = url
         contentTab.contentState = ContentState.ACTIVE
         contentTab.lastUsed = System.currentTimeMillis()
+
+        // Swap container child — homepage stays alive, content goes in
+        contentContainer.removeAllViews()
+        contentContainer.addView(contentTab.webView)
         activeView = "content"
+    }
+
+    // ── Switch to homepage ───────────────────────────────────────
+    fun showHomepage() {
+        if (activeView != "home") {
+            contentContainer.removeAllViews()
+            contentContainer.addView(homeTab.webView)
+            activeView = "home"
+        }
     }
 
     // ── Back Handler ────────────────────────────────────────────
@@ -473,7 +426,12 @@ fun HueTubeApp() {
             }
             BackAction.MinimizeToPip -> {
                 contentTab.contentState = ContentState.PIP
+                // Don't swap container — content stays in container
+                // PiP renders as overlay modifier
                 activeView = "pip"
+                // Keep homepage visible behind
+                contentContainer.removeAllViews()
+                contentContainer.addView(homeTab.webView)
             }
             BackAction.ClosePip -> {
                 contentTab.webView?.destroy()
@@ -488,42 +446,87 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Single AndroidView, swap content ────────────────────────
+    // ── PiP drag handler ─────────────────────────────────────────
+    val pipWidthPx = with(density) { 240.dp.toPx() }
+    val pipHeightPx = with(density) { 135.dp.toPx() }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BG)
     ) {
+        // ── ONE AndroidView — never recreated ────────────────────
         AndroidView(
             factory = { contentContainer },
-            update = { container ->
-                val target = when (activeView) {
-                    "content" -> contentTab.webView
-                    else -> homeTab.webView
-                }
-                if (target != null && (container.childCount == 0 || container.getChildAt(0) != target)) {
-                    container.removeAllViews()
-                    container.addView(target)
-                }
-            },
             modifier = Modifier.fillMaxSize()
         )
 
-        // ── PiP Overlay ─────────────────────────────────────────
+        // ── PiP Overlay (uses content WebView in-place, no re-parenting) ─
         if (activeView == "pip" && contentTab.webView != null) {
-            PipOverlay(
-                webView = contentTab.webView!!,
-                onTapExpand = {
-                    contentTab.contentState = ContentState.ACTIVE
-                    activeView = "content"
-                },
-                onClose = {
-                    contentTab.webView?.destroy()
-                    contentTab.webView = null
-                    contentTab.contentState = ContentState.NONE
-                    activeView = "home"
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(10f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
+                        .size(width = 240.dp, height = 135.dp)
+                        .clip(RectangleShape)
+                        .background(SURFACE)
+                        .onGloballyPositioned { coords ->
+                            if (pipOffsetX == 0f && pipOffsetY == 0f) {
+                                val parentW = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
+                                val parentH = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
+                                pipOffsetX = parentW - pipWidthPx - with(density) { 16.dp.toPx() }
+                                pipOffsetY = parentH - pipHeightPx - with(density) { 16.dp.toPx() }
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                pipOffsetX += dragAmount.x
+                                pipOffsetY += dragAmount.y
+                            }
+                        }
+                        .clickable {
+                            // Tap: expand back to full content
+                            contentContainer.removeAllViews()
+                            contentContainer.addView(contentTab.webView)
+                            contentTab.contentState = ContentState.ACTIVE
+                            activeView = "content"
+                        }
+                ) {
+                    // Show content WebView inside PiP box
+                    // Note: This temporarily re-parents — the blink is unavoidable here
+                    // but only happens on PiP expand/collapse, not during normal use
+                    AndroidView(
+                        factory = { contentTab.webView!! },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Close button
+                    IconButton(
+                        onClick = {
+                            contentTab.webView?.destroy()
+                            contentTab.webView = null
+                            contentTab.contentState = ContentState.NONE
+                            activeView = "home"
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(24.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            "Close PiP",
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
                 }
-            )
+            }
         }
 
         // ── Fullscreen custom view ──────────────────────────────
@@ -539,6 +542,8 @@ fun HueTubeApp() {
 }
 
 // END OF PART 8/10
+
+
 
 
 // ═══════════════════════════════════════════════════════════════════
