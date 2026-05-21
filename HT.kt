@@ -1,28 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V6.0 (Single Container Tab Switching — No Blink)
+// HueTube - V7.0 (V1.0 + Back Fix + Fullscreen + Banner)
 // ═══════════════════════════════════════════════════════════════════
-// === PART 0/10 — Architecture ===
+// === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// Two WebViews, one container — only ONE visible at a time.
-// The hidden WebView is detached from the view hierarchy but kept
-// alive in memory so audio/video keeps playing.
+// THEME: Dark YouTube — Near-Black Background
 //
-// States:
-//   HIDDEN  — Tab 0 (homepage) in container, Tab 1 destroyed
-//   ACTIVE  — Tab 1 (content) in container, Tab 0 detached alive
-//   BANNER  — Tab 0 in container, Tab 1 detached alive (playing)
-//             Banner overlay at bottom shows title + close button
-//
-// Banner interactions:
-//   Tap banner → switch to ACTIVE (Tab 1 back in container)
-//   Tap X      → destroy Tab 1, go to HIDDEN
-//   Tap link   → destroy old Tab 1, create new, go to ACTIVE
+// Two tabs: Tab 0 (Homepage, permanent), Tab 1 (Content, created on link tap)
+// Only ONE WebView visible at a time.
+// Content tab stays alive when detached (banner mode) — audio keeps playing.
 //
 // Back navigation:
 //   ACTIVE + canGoBack → goBack()
-//   ACTIVE + no history → BANNER
-//   BANNER              → destroy Tab 1, HIDDEN
+//   ACTIVE + no history → BANNER (homepage visible, content detached, banner shown)
+//   BANNER              → destroy content, HIDDEN
 //   HIDDEN              → exit app
 //
 // ═══════════════════════════════════════════════════════════════════
@@ -93,8 +84,8 @@ private val ACCENT = Color(0xFFFF0000)
 
 enum class ContentState {
     HIDDEN,   // Tab 0 visible, Tab 1 destroyed
-    ACTIVE,   // Tab 1 visible, Tab 0 detached alive
-    BANNER    // Tab 0 visible + banner, Tab 1 detached alive (playing)
+    ACTIVE,   // Tab 1 visible, Tab 0 detached
+    BANNER    // Tab 0 visible + banner, Tab 1 detached (playing)
 }
 
 // END OF PART 3/10
@@ -301,27 +292,20 @@ fun PlayingBanner(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Pulsing dot
             Box(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
                     .background(ACCENT.copy(alpha = dotAlpha))
             )
-
             Spacer(modifier = Modifier.width(10.dp))
-
-            // Play icon
             Icon(
                 Icons.Default.PlayArrow,
                 contentDescription = "Playing",
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(16.dp)
             )
-
             Spacer(modifier = Modifier.width(8.dp))
-
-            // Title
             Text(
                 text = title.ifBlank { "Now Playing" },
                 color = Color.White,
@@ -331,8 +315,6 @@ fun PlayingBanner(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-
-            // Close button — destroys the content tab
             IconButton(
                 onClick = onClose,
                 modifier = Modifier.size(28.dp)
@@ -361,12 +343,10 @@ fun HueTubeApp() {
     val activity = context as? android.app.Activity ?: return
     val fullscreenManager = remember { FullscreenManager(activity) }
 
-    // ── State ────────────────────────────────────────────────────
     var contentState by remember { mutableStateOf(ContentState.HIDDEN) }
     var contentTitle by remember { mutableStateOf("") }
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // ── Permanent container — NEVER recreated by Compose ─────────
     val container = remember {
         FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -377,18 +357,13 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Tab 0 (Homepage) — permanent, never destroyed ────────────
     val homepageWebView = remember { createHomepageWebView(context) }
-
-    // ── Tab 1 (Content) — created/destroyed as needed ────────────
     var contentWebView by remember { mutableStateOf<WebView?>(null) }
 
-    // ── Initialize: Tab 0 in container ───────────────────────────
     LaunchedEffect(Unit) {
         container.addView(homepageWebView)
     }
 
-    // ── Switch container to show a specific WebView ──────────────
     fun switchTo(target: WebView) {
         if (container.childCount == 0 || container.getChildAt(0) != target) {
             container.removeAllViews()
@@ -396,41 +371,27 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Create Tab 1 (content) ───────────────────────────────────
     fun createContent(url: String) {
-        // Destroy old Tab 1 if exists
         contentWebView?.destroy()
         contentWebView = null
-
         val wv = createContentWebView(
-            context = context,
-            url = url,
+            context = context, url = url,
             onNewContent = { newUrl -> createContent(newUrl) },
             onTitleChanged = { title -> contentTitle = title },
-            onFullscreenShow = {
-                isFullscreen = true
-                fullscreenManager.enterFullscreen()
-            },
-            onFullscreenHide = {
-                isFullscreen = false
-                fullscreenManager.exitFullscreen()
-            }
+            onFullscreenShow = { isFullscreen = true; fullscreenManager.enterFullscreen() },
+            onFullscreenHide = { isFullscreen = false; fullscreenManager.exitFullscreen() }
         )
         contentWebView = wv
         contentTitle = ""
-
-        // Show Tab 1 in container, Tab 0 stays alive detached
         switchTo(wv)
         contentState = ContentState.ACTIVE
     }
 
-    // ── Show banner: Tab 0 in container, Tab 1 detached alive ────
     fun showBanner() {
         switchTo(homepageWebView)
         contentState = ContentState.BANNER
     }
 
-    // ── Destroy Tab 1 completely ─────────────────────────────────
     fun destroyContent() {
         contentWebView?.destroy()
         contentWebView = null
@@ -439,17 +400,13 @@ fun HueTubeApp() {
         contentState = ContentState.HIDDEN
     }
 
-    // ── Back Handler ────────────────────────────────────────────
     BackHandler {
         if (isFullscreen) {
             isFullscreen = false
             fullscreenManager.exitFullscreen()
             return@BackHandler
         }
-
-        val canGoBack = contentWebView?.canGoBack() == true
-
-        when (determineBackAction(contentState, canGoBack)) {
+        when (determineBackAction(contentState, contentWebView?.canGoBack() == true)) {
             BackAction.GoBackInHistory -> contentWebView?.goBack()
             BackAction.ShowBanner -> showBanner()
             BackAction.CloseBanner -> destroyContent()
@@ -457,32 +414,18 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Layout ───────────────────────────────────────────────────
     Box(modifier = Modifier.fillMaxSize()) {
-        // ONE AndroidView — factory runs ONCE, container never recreated
-        AndroidView(
-            factory = { container },
-            modifier = Modifier.fillMaxSize()
-        )
+        AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
 
-        // Banner overlay at bottom (pure Compose, no WebView)
         if (contentState == ContentState.BANNER) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-            ) {
+            Box(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) {
                 PlayingBanner(
                     title = contentTitle,
                     onTap = {
-                        // Switch back to Tab 1
                         contentWebView?.let { switchTo(it) }
                         contentState = ContentState.ACTIVE
                     },
-                    onClose = {
-                        // Close button: destroy Tab 1 completely
-                        destroyContent()
-                    }
+                    onClose = { destroyContent() }
                 )
             }
         }
