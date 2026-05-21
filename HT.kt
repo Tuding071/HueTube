@@ -383,7 +383,6 @@ fun HueTubeApp() {
                 webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                         if (url != HOMEPAGE_URL && url != "about:blank") {
-                            // Homepage tried to navigate away — force back
                             view.loadUrl(HOMEPAGE_URL)
                         }
                         view.evaluateJavascript("""
@@ -420,15 +419,23 @@ fun HueTubeApp() {
     // ── Content Tab (Slot 1) ─────────────────────────────────────
     val contentTab = remember { TabState() }
 
-    // ── Show homepage? ───────────────────────────────────────────
-    var showHomepage by remember { mutableStateOf(true) }
-
-    // ── Fullscreen state ─────────────────────────────────────────
+    // ── UI State ─────────────────────────────────────────────────
+    var activeView by remember { mutableStateOf("home") }  // "home" | "content" | "pip"
     var isFullscreen by remember { mutableStateOf(false) }
+
+    // ── Stable container for content WebView ─────────────────────
+    val contentContainer = remember {
+        android.widget.FrameLayout(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+        }
+    }
 
     // ── Create content tab ───────────────────────────────────────
     fun createContentTab(url: String) {
-        // Destroy old if exists
         if (contentTab.webView != null) {
             contentTab.webView?.destroy()
         }
@@ -448,13 +455,12 @@ fun HueTubeApp() {
         contentTab.url = url
         contentTab.contentState = ContentState.ACTIVE
         contentTab.lastUsed = System.currentTimeMillis()
-        showHomepage = false
+        activeView = "content"
     }
 
     // ── Back Handler ────────────────────────────────────────────
     BackHandler {
         if (isFullscreen) {
-            // In fullscreen, exit fullscreen first
             isFullscreen = false
             fullscreenManager.exitFullscreen()
             contentTab.customView = null
@@ -467,13 +473,14 @@ fun HueTubeApp() {
             }
             BackAction.MinimizeToPip -> {
                 contentTab.contentState = ContentState.PIP
-                showHomepage = true
+                activeView = "pip"
             }
             BackAction.ClosePip -> {
                 contentTab.webView?.destroy()
                 contentTab.webView = null
                 contentTab.contentState = ContentState.NONE
                 contentTab.url = HOMEPAGE_URL
+                activeView = "home"
             }
             BackAction.CloseApp -> {
                 activity.finish()
@@ -481,60 +488,40 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Main Layout ─────────────────────────────────────────────
+    // ── Single AndroidView, swap content ────────────────────────
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BG)
     ) {
-        // ── Homepage (Slot 0) ────────────────────────────────────
-        AnimatedVisibility(
-            visible = showHomepage,
-            enter = fadeIn(tween(200)),
-            exit = fadeOut(tween(200)),
+        AndroidView(
+            factory = { contentContainer },
+            update = { container ->
+                val target = when (activeView) {
+                    "content" -> contentTab.webView
+                    else -> homeTab.webView
+                }
+                if (target != null && (container.childCount == 0 || container.getChildAt(0) != target)) {
+                    container.removeAllViews()
+                    container.addView(target)
+                }
+            },
             modifier = Modifier.fillMaxSize()
-        ) {
-            AndroidView(
-                factory = { homeTab.webView!! },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .systemBarsPadding()
-            )
-        }
-
-        // ── Content fullscreen (Slot 1 ACTIVE) ──────────────────
-        AnimatedVisibility(
-            visible = contentTab.contentState == ContentState.ACTIVE && !showHomepage,
-            enter = slideInVertically(
-                initialOffsetY = { it },
-                animationSpec = tween(300)
-            ) + fadeIn(tween(300)),
-            exit = slideOutVertically(
-                targetOffsetY = { it },
-                animationSpec = tween(200)
-            ) + fadeOut(tween(200)),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            contentTab.webView?.let { wv ->
-                AndroidView(
-                    factory = { wv },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
+        )
 
         // ── PiP Overlay ─────────────────────────────────────────
-        if (contentTab.contentState == ContentState.PIP && contentTab.webView != null) {
+        if (activeView == "pip" && contentTab.webView != null) {
             PipOverlay(
                 webView = contentTab.webView!!,
                 onTapExpand = {
                     contentTab.contentState = ContentState.ACTIVE
-                    showHomepage = false
+                    activeView = "content"
                 },
                 onClose = {
                     contentTab.webView?.destroy()
                     contentTab.webView = null
                     contentTab.contentState = ContentState.NONE
+                    activeView = "home"
                 }
             )
         }
