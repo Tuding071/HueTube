@@ -1,42 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V3.0 (YouTube WebView — Dual Layer, No Blink)
+// HueTube - V4.0 (WebView Manager + Compose PiP)
 // ═══════════════════════════════════════════════════════════════════
-// === PART 0/10 — Theme Specification ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// ARCHITECTURE:
-//   Two WebViews stacked permanently (never re-parented):
-//     - Homepage layer (bottom, zIndex 0)
-//     - Content layer (top, zIndex 1)
-//
-//   Visibility toggled via alpha + touch absorption:
-//     - Homepage active: content alpha=0, content absorbs touch=none
-//     - Content active:  homepage alpha=0.3 (dimmed behind)
-//     - PiP mode:        content shrunk to corner overlay,
-//                        homepage fully visible and touchable,
-//                        PiP touchable, tapping bg switches to content
-//
-// BACK NAVIGATION:
-//   Content canGoBack → goBack()
-//   Content at start   → minimize to PiP
-//   PiP visible        → close PiP (destroy content)
-//   Homepage alone     → finish()
-//
-// ═══════════════════════════════════════════════════════════════════
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 1/10 — Package, Imports, MainActivity ===
+// === PART 1/8 — Package, Imports, MainActivity ===
 // ═══════════════════════════════════════════════════════════════════
 
 package com.huetube.app
 
 import android.os.Bundle
-import android.view.View
-import android.view.ViewGroup
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -70,211 +40,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// END OF PART 1/10
+// END OF PART 1/8
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 2/10 — Constants ===
-// ═══════════════════════════════════════════════════════════════════
-
-private val BG = Color(0xFF0A0A0A)
-private val SURFACE = Color(0xFF121212)
-private const val HOMEPAGE_URL = "https://m.youtube.com"
-
-object AppContextHolder {
-    lateinit var context: android.content.Context
-}
-
-// END OF PART 2/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 3/10 — Content State Enum & TabState ===
+// === PART 2/8 — Content State Enum ===
 // ═══════════════════════════════════════════════════════════════════
 
 enum class ContentState {
-    HIDDEN,   // Content not created or destroyed
-    ACTIVE,   // Full screen, touchable
-    PIP       // Minimized overlay on homepage
+    HIDDEN,
+    ACTIVE,
+    PIP
 }
 
-class TabState {
-    var webView by mutableStateOf<WebView?>(null)
-    var url by mutableStateOf(HOMEPAGE_URL)
-    var contentState by mutableStateOf(ContentState.HIDDEN)
-    var customView by mutableStateOf<View?>(null)
-}
-
-// END OF PART 3/10
+// END OF PART 2/8
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 4/10 — WebView Factory ===
-// ═══════════════════════════════════════════════════════════════════
-
-fun createContentWebView(
-    url: String,
-    tabState: TabState,
-    onNewContentRequest: (String) -> Unit,
-    onCustomViewShow: () -> Unit,
-    onCustomViewHide: () -> Unit
-): WebView {
-    return WebView(AppContextHolder.context).apply {
-        setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
-        layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
-        with(settings) {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            loadWithOverviewMode = true
-            useWideViewPort = true
-            builtInZoomControls = true
-            displayZoomControls = false
-            setSupportZoom(true)
-            mediaPlaybackRequiresUserGesture = false
-        }
-
-        webChromeClient = object : WebChromeClient() {
-            override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-                tabState.customView = view
-                onCustomViewShow()
-            }
-
-            override fun onHideCustomView() {
-                tabState.customView = null
-                onCustomViewHide()
-            }
-        }
-
-        webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                tabState.url = url
-                view.evaluateJavascript("""
-                    (function() {
-                        document.documentElement.style.setProperty('color-scheme', 'dark');
-                        document.documentElement.style.setProperty('background-color', '#0A0A0A');
-                        var originalMatchMedia = window.matchMedia;
-                        window.matchMedia = function(query) {
-                            var result = originalMatchMedia(query);
-                            if (query.includes('prefers-color-scheme')) {
-                                return {
-                                    matches: true, media: query, onchange: null,
-                                    addListener: function(cb) { cb(this); },
-                                    removeListener: function() {},
-                                    addEventListener: function(type, cb) { if (type === 'change') cb(this); },
-                                    removeEventListener: function() {},
-                                    dispatchEvent: function() { return true; }
-                                };
-                            }
-                            return result;
-                        };
-                        document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
-                    })();
-                """.trimIndent(), null)
-            }
-
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: android.webkit.WebResourceRequest
-            ): Boolean {
-                val clickedUrl = request.url.toString()
-                if (request.isForMainFrame && clickedUrl != view.url && clickedUrl != HOMEPAGE_URL) {
-                    onNewContentRequest(clickedUrl)
-                    return true
-                }
-                return false
-            }
-        }
-
-        loadUrl(url)
-    }
-}
-
-fun createHomepageWebView(): WebView {
-    return WebView(AppContextHolder.context).apply {
-        setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
-        layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
-        with(settings) {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            loadWithOverviewMode = true
-            useWideViewPort = true
-            builtInZoomControls = true
-            displayZoomControls = false
-            setSupportZoom(true)
-            mediaPlaybackRequiresUserGesture = false
-        }
-        webChromeClient = object : WebChromeClient() {}
-        webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                if (url != HOMEPAGE_URL && url != "about:blank") {
-                    view.loadUrl(HOMEPAGE_URL)
-                }
-                view.evaluateJavascript("""
-                    (function() {
-                        document.documentElement.style.setProperty('color-scheme', 'dark');
-                        document.documentElement.style.setProperty('background-color', '#0A0A0A');
-                        var originalMatchMedia = window.matchMedia;
-                        window.matchMedia = function(query) {
-                            var result = originalMatchMedia(query);
-                            if (query.includes('prefers-color-scheme')) {
-                                return {
-                                    matches: true, media: query, onchange: null,
-                                    addListener: function(cb) { cb(this); },
-                                    removeListener: function() {},
-                                    addEventListener: function(type, cb) { if (type === 'change') cb(this); },
-                                    removeEventListener: function() {},
-                                    dispatchEvent: function() { return true; }
-                                };
-                            }
-                            return result;
-                        };
-                        document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
-                    })();
-                """.trimIndent(), null)
-            }
-        }
-        loadUrl(HOMEPAGE_URL)
-    }
-}
-
-// END OF PART 4/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Back Handler Logic ===
-// ═══════════════════════════════════════════════════════════════════
-
-sealed class BackAction {
-    object GoBackInHistory : BackAction()
-    object MinimizeToPip : BackAction()
-    object ClosePip : BackAction()
-    object CloseApp : BackAction()
-}
-
-fun determineBackAction(contentState: ContentState, contentTab: TabState?): BackAction {
-    return when {
-        contentState == ContentState.ACTIVE && contentTab?.webView?.canGoBack() == true ->
-            BackAction.GoBackInHistory
-        contentState == ContentState.ACTIVE ->
-            BackAction.MinimizeToPip
-        contentState == ContentState.PIP ->
-            BackAction.ClosePip
-        else ->
-            BackAction.CloseApp
-    }
-}
-
-// END OF PART 5/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 6/10 — Fullscreen Manager ===
+// === PART 3/8 — Fullscreen Manager ===
 // ═══════════════════════════════════════════════════════════════════
 
 class FullscreenManager(val activity: android.app.Activity) {
@@ -294,30 +77,48 @@ class FullscreenManager(val activity: android.app.Activity) {
     }
 }
 
-// END OF PART 6/10
+// END OF PART 3/8
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 7/10 — Main App Composable ===
+// === PART 4/8 — Back Action Logic ===
+// ═══════════════════════════════════════════════════════════════════
+
+sealed class BackAction {
+    object GoBackInHistory : BackAction()
+    object MinimizeToPip : BackAction()
+    object ClosePip : BackAction()
+    object CloseApp : BackAction()
+}
+
+fun determineBackAction(state: ContentState, canGoBack: Boolean): BackAction = when {
+    state == ContentState.ACTIVE && canGoBack -> BackAction.GoBackInHistory
+    state == ContentState.ACTIVE -> BackAction.MinimizeToPip
+    state == ContentState.PIP -> BackAction.ClosePip
+    else -> BackAction.CloseApp
+}
+
+// END OF PART 4/8
+
+
+// ═══════════════════════════════════════════════════════════════════
+// === PART 5/8 — Main App Composable ===
 // ═══════════════════════════════════════════════════════════════════
 
 @Composable
 fun HueTubeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? android.app.Activity ?: return
-    AppContextHolder.context = context.applicationContext
 
     val fullscreenManager = remember { FullscreenManager(activity) }
     val density = LocalDensity.current
 
-    // ── Two permanent WebViews — NEVER recreated, NEVER re-parented ─
-    val homepageWebView = remember { createHomepageWebView() }
-    val contentTab = remember { TabState() }
-
-    // ── UI State ─────────────────────────────────────────────────
+    // ── WebView Manager — owns both WebViews, container never changes ─
+    val wm = remember { WebViewManager(context) }
+    var contentState by remember { mutableStateOf(ContentState.HIDDEN) }
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // PiP drag offset
+    // PiP drag state
     var pipOffsetX by remember { mutableStateOf(0f) }
     var pipOffsetY by remember { mutableStateOf(0f) }
     val pipWidthDp = 240.dp
@@ -325,24 +126,20 @@ fun HueTubeApp() {
     val pipWidthPx = with(density) { pipWidthDp.toPx() }
     val pipHeightPx = with(density) { pipHeightDp.toPx() }
 
-    // ── Create / replace content tab ─────────────────────────────
-    fun createContentTab(url: String) {
-        contentTab.webView?.destroy()
-        contentTab.webView = createContentWebView(
-            url = url,
-            tabState = contentTab,
-            onNewContentRequest = { newUrl -> createContentTab(newUrl) },
-            onCustomViewShow = {
-                isFullscreen = true
-                fullscreenManager.enterFullscreen()
-            },
-            onCustomViewHide = {
-                isFullscreen = false
-                fullscreenManager.exitFullscreen()
-            }
-        )
-        contentTab.url = url
-        contentTab.contentState = ContentState.ACTIVE
+    // ── Wire callbacks ──────────────────────────────────────────
+    LaunchedEffect(wm) {
+        wm.onNewContentRequest = { url ->
+            wm.showContent(url)
+            contentState = ContentState.ACTIVE
+        }
+        wm.onCustomViewShow = {
+            isFullscreen = true
+            fullscreenManager.enterFullscreen()
+        }
+        wm.onCustomViewHide = {
+            isFullscreen = false
+            fullscreenManager.exitFullscreen()
+        }
     }
 
     // ── Back Handler ────────────────────────────────────────────
@@ -350,181 +147,107 @@ fun HueTubeApp() {
         if (isFullscreen) {
             isFullscreen = false
             fullscreenManager.exitFullscreen()
-            contentTab.customView = null
             return@BackHandler
         }
 
-        when (determineBackAction(contentTab.contentState, contentTab)) {
-            BackAction.GoBackInHistory -> {
-                contentTab.webView?.goBack()
-            }
+        when (determineBackAction(contentState, wm.canContentGoBack())) {
+            BackAction.GoBackInHistory -> wm.contentGoBack()
             BackAction.MinimizeToPip -> {
-                contentTab.contentState = ContentState.PIP
+                wm.showHomepage()
+                contentState = ContentState.PIP
             }
             BackAction.ClosePip -> {
-                contentTab.webView?.destroy()
-                contentTab.webView = null
-                contentTab.contentState = ContentState.HIDDEN
-                contentTab.url = HOMEPAGE_URL
+                wm.destroyContent()
+                contentState = ContentState.HIDDEN
                 pipOffsetX = 0f
                 pipOffsetY = 0f
             }
-            BackAction.CloseApp -> {
-                activity.finish()
-            }
+            BackAction.CloseApp -> activity.finish()
         }
     }
 
-    // ── Determine what's touchable ───────────────────────────────
-    val homepageTouchable = contentTab.contentState != ContentState.ACTIVE
-    val contentTouchable = contentTab.contentState == ContentState.ACTIVE
-    val pipTouchable = contentTab.contentState == ContentState.PIP
-
-    // ── LAYOUT: Two stacked layers ───────────────────────────────
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BG)
-    ) {
-        // ══════════════════════════════════════════════════════════
-        // LAYER 0 — Homepage (always visible, touchable when no content active)
-        // ══════════════════════════════════════════════════════════
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ── Container — ONE AndroidView for the entire app lifecycle ─
         AndroidView(
-            factory = { homepageWebView },
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(0f)
-                .then(
-                    if (!homepageTouchable) {
-                        // Absorb all touches — they pass through to nothing
-                        Modifier.clickable(
-                            indication = null,
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                        ) { /* absorb */ }
-                    } else {
-                        Modifier
-                    }
-                )
+            factory = { wm.container },
+            modifier = Modifier.fillMaxSize()
         )
 
-        // ══════════════════════════════════════════════════════════
-        // LAYER 1 — Content (ACTIVE: full screen | PIP: corner overlay | HIDDEN: invisible)
-        // ══════════════════════════════════════════════════════════
-        if (contentTab.webView != null && contentTab.contentState != ContentState.HIDDEN) {
-            val isPip = contentTab.contentState == ContentState.PIP
-
-            Box(
-                modifier = Modifier
-                    .then(
-                        if (isPip) {
-                            Modifier
-                                .zIndex(10f)
-                                .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
-                                .size(width = pipWidthDp, height = pipHeightDp)
-                                .clip(RectangleShape)
-                                .background(SURFACE)
-                                .onGloballyPositioned { coords ->
-                                    if (pipOffsetX == 0f && pipOffsetY == 0f) {
-                                        val parentW = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
-                                        val parentH = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
-                                        pipOffsetX = parentW - pipWidthPx - with(density) { 16.dp.toPx() }
-                                        pipOffsetY = parentH - pipHeightPx - with(density) { 16.dp.toPx() }
-                                    }
-                                }
-                                .pointerInput(Unit) {
-                                    detectDragGestures { change, dragAmount ->
-                                        change.consume()
-                                        pipOffsetX += dragAmount.x
-                                        pipOffsetY += dragAmount.y
-                                    }
-                                }
-                        } else {
-                            Modifier
-                                .fillMaxSize()
-                                .zIndex(1f)
-                        }
-                    )
-            ) {
-                // The content WebView
-                AndroidView(
-                    factory = { contentTab.webView!! },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (!contentTouchable && !pipTouchable) {
-                                Modifier.clickable(
-                                    indication = null,
-                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                                ) { /* absorb */ }
-                            } else {
-                                Modifier
-                            }
-                        )
-                )
-
-                // PiP close button
-                if (isPip) {
-                    IconButton(
-                        onClick = {
-                            contentTab.webView?.destroy()
-                            contentTab.webView = null
-                            contentTab.contentState = ContentState.HIDDEN
-                            pipOffsetX = 0f
-                            pipOffsetY = 0f
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(24.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            "Close PiP",
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        // ══════════════════════════════════════════════════════════
-        // TAP BACKGROUND WHILE PIP ACTIVE → switch to content
-        // ══════════════════════════════════════════════════════════
-        if (contentTab.contentState == ContentState.PIP) {
-            // Invisible tap target behind PiP — tapping homepage switches to content
+        // ── PiP overlay (Compose layer on top of the container) ──
+        if (contentState == ContentState.PIP && wm.contentWebView != null) {
+            // Tap background → expand back to content
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(5f)
                     .clickable {
-                        // Tapped background → expand content back to full
-                        contentTab.contentState = ContentState.ACTIVE
+                        wm.showContent(wm.contentWebView?.url ?: WebViewManager.HOMEPAGE_URL)
+                        contentState = ContentState.ACTIVE
                     }
             )
+
+            // PiP window
+            Box(
+                modifier = Modifier
+                    .zIndex(10f)
+                    .offset { IntOffset(pipOffsetX.roundToInt(), pipOffsetY.roundToInt()) }
+                    .size(width = pipWidthDp, height = pipHeightDp)
+                    .clip(RectangleShape)
+                    .background(Color(0xFF121212))
+                    .onGloballyPositioned { coords ->
+                        if (pipOffsetX == 0f && pipOffsetY == 0f) {
+                            val parentW = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
+                            val parentH = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
+                            pipOffsetX = parentW - pipWidthPx - with(density) { 16.dp.toPx() }
+                            pipOffsetY = parentH - pipHeightPx - with(density) { 16.dp.toPx() }
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            pipOffsetX += dragAmount.x
+                            pipOffsetY += dragAmount.y
+                        }
+                    }
+                    .clickable {
+                        // Tap PiP → expand
+                        wm.showContent(wm.contentWebView?.url ?: WebViewManager.HOMEPAGE_URL)
+                        contentState = ContentState.ACTIVE
+                    }
+            ) {
+                // Show content WebView inside PiP
+                AndroidView(
+                    factory = { wm.contentWebView!! },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Close button
+                IconButton(
+                    onClick = {
+                        wm.destroyContent()
+                        contentState = ContentState.HIDDEN
+                        pipOffsetX = 0f
+                        pipOffsetY = 0f
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(24.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, "Close", tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            }
         }
     }
 }
 
-// END OF PART 7/10
+// END OF PART 5/8
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 8/10 — Reserved for Future Features ===
+// === PART 6/8 — Reserved ===
 // ═══════════════════════════════════════════════════════════════════
-
-// END OF PART 8/10
-
-
+// === PART 7/8 — Reserved ===
 // ═══════════════════════════════════════════════════════════════════
-// === PART 9/10 — Reserved for Future Features ===
+// === PART 8/8 — Reserved ===
 // ═══════════════════════════════════════════════════════════════════
-
-// END OF PART 9/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 10/10 — Reserved for Future Features ===
-// ═══════════════════════════════════════════════════════════════════
-
-// END OF PART 10/10
