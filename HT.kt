@@ -49,7 +49,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -304,8 +303,11 @@ fun PipOverlay(
                     pipHeight = coords.size.height
                     if (offsetX == 0f && offsetY == 0f) {
                         // Position bottom-right initially
-                        offsetX = coords.parentCoordinates?.size?.width?.toFloat()?.minus(pipWidth)?.minus(16.dp.toPx()) ?: 0f
-                        offsetY = coords.parentCoordinates?.size?.height?.toFloat()?.minus(pipHeight)?.minus(16.dp.toPx()) ?: 0f
+                        val parentWidth = coords.parentCoordinates?.size?.width?.toFloat() ?: 0f
+                        val parentHeight = coords.parentCoordinates?.size?.height?.toFloat() ?: 0f
+                        val dpToPx = density.density
+                        offsetX = parentWidth - pipWidth - (16f * dpToPx)
+                        offsetY = parentHeight - pipHeight - (16f * dpToPx)
                     }
                 }
                 .pointerInput(Unit) {
@@ -449,15 +451,6 @@ fun HueTubeApp() {
         showHomepage = false
     }
 
-    // ── Handle custom view directly ──────────────────────────────
-    LaunchedEffect(contentTab.customView) {
-        val customView = contentTab.customView
-        if (customView != null) {
-            // Custom view is shown by WebChromeClient directly
-            // No additional handling needed — it overlays the WebView
-        }
-    }
-
     // ── Back Handler ────────────────────────────────────────────
     BackHandler {
         if (isFullscreen) {
@@ -465,7 +458,6 @@ fun HueTubeApp() {
             isFullscreen = false
             fullscreenManager.exitFullscreen()
             contentTab.customView = null
-            // WebChromeClient.onHideCustomView() will be called by WebView
             return@BackHandler
         }
 
