@@ -48,7 +48,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -58,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // END OF PART 1/10
+
 
 // ═══════════════════════════════════════════════════════════════════
 // === PART 2/10 — Constants ===
@@ -265,7 +266,6 @@ fun createContentWebView(
 // END OF PART 6/10
 
 
-
 // ═══════════════════════════════════════════════════════════════════
 // === PART 7/10 — Banner Composable ===
 // ═══════════════════════════════════════════════════════════════════
@@ -350,7 +350,6 @@ fun PlayingBanner(
 }
 
 // END OF PART 7/10
-
 
 
 // ═══════════════════════════════════════════════════════════════════
