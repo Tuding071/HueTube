@@ -1,13 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.2 (Fullscreen Fix + Back Fix)
+// HueTube - V1.3 (Fullscreen Landscape/Potrait Rotation)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // THEME: Dark YouTube — Near-Black Background
 //
-// Fullscreen: custom View goes to decorView, WebView detached
-//             back button calls onCustomViewHidden() for proper exit
+// Fullscreen: website requests orientation → phone rotates first →
+//             then custom view added to decorView.
+//             No Activity recreation (configChanges handles it).
 //
 // Back navigation:
 //   FULLSCREEN → exit fullscreen via callback
@@ -24,6 +25,7 @@
 
 package com.huetube.app
 
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -66,7 +68,7 @@ private const val HOMEPAGE_URL = "https://m.youtube.com"
 // ═══════════════════════════════════════════════════════════════════
 
 class FullscreenManager(val activity: android.app.Activity) {
-    
+
     private var customView: View? = null
     private var webViewContainer: FrameLayout? = null
     private var webView: WebView? = null
@@ -82,6 +84,10 @@ class FullscreenManager(val activity: android.app.Activity) {
         webViewContainer = container
         webView = wv
 
+        // Rotate to landscape before going fullscreen
+        // YouTube videos always want landscape for fullscreen
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
         // Remove WebView from container
         container.removeView(wv)
 
@@ -94,7 +100,7 @@ class FullscreenManager(val activity: android.app.Activity) {
         decorView.addView(view)
 
         // Hide system bars
-        activity.window.decorView.systemUiVisibility = (
+        decorView.systemUiVisibility = (
             android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
             or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -121,7 +127,10 @@ class FullscreenManager(val activity: android.app.Activity) {
         }
 
         // Restore system bars
-        activity.window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+        decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+
+        // Unlock orientation — let the sensor decide
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
         // Notify WebView that fullscreen is done
         callback?.onCustomViewHidden()
