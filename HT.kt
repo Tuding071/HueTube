@@ -1,25 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.1 (Back Fix + Fullscreen Video)
+// HueTube - V1.2 (Fullscreen Fix + Back Fix)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // THEME: Dark YouTube — Near-Black Background
 //
-// COLOURS:
-//   Background:    #0A0A0A  (near black)
-//   Surface:       #121212  (slightly elevated)
-//   Accent:        #FF0000  (YouTube red)
-//   Text Primary:  #FFFFFF  (white)
-//   Text Muted:    #888888  (grey)
+// Fullscreen: custom View goes to decorView, WebView detached
+//             back button calls onCustomViewHidden() for proper exit
 //
-// SHAPES:
-//   Everything:    RectangleShape  (0dp corner radius)
-//
-// BACK NAVIGATION (no refresh):
-//   canGoBack → goBack()
-//   at homepage → close app
-//   elsewhere → go to homepage
+// Back navigation:
+//   FULLSCREEN → exit fullscreen via callback
+//   canGoBack  → goBack()
+//   on homepage → exit app
+//   elsewhere  → go to homepage
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -36,6 +30,7 @@ import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -71,7 +66,34 @@ private const val HOMEPAGE_URL = "https://m.youtube.com"
 // ═══════════════════════════════════════════════════════════════════
 
 class FullscreenManager(val activity: android.app.Activity) {
-    fun enterFullscreen() {
+    
+    private var customView: View? = null
+    private var webViewContainer: FrameLayout? = null
+    private var webView: WebView? = null
+
+    fun enterFullscreen(
+        view: View,
+        callback: WebChromeClient.CustomViewCallback,
+        container: FrameLayout,
+        wv: WebView
+    ) {
+        // Save references
+        customView = view
+        webViewContainer = container
+        webView = wv
+
+        // Remove WebView from container
+        container.removeView(wv)
+
+        // Add custom view to decor view (fullscreen overlay)
+        val decorView = activity.window.decorView as android.widget.FrameLayout
+        view.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        decorView.addView(view)
+
+        // Hide system bars
         activity.window.decorView.systemUiVisibility = (
             android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
             or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -82,8 +104,31 @@ class FullscreenManager(val activity: android.app.Activity) {
         )
     }
 
-    fun exitFullscreen() {
+    fun exitFullscreen(callback: WebChromeClient.CustomViewCallback?) {
+        val decorView = activity.window.decorView as android.widget.FrameLayout
+
+        // Remove custom view from decor view
+        customView?.let { decorView.removeView(it) }
+        customView = null
+
+        // Restore WebView to its container
+        webView?.let { wv ->
+            webViewContainer?.let { container ->
+                if (wv.parent == null) {
+                    container.addView(wv)
+                }
+            }
+        }
+
+        // Restore system bars
         activity.window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+
+        // Notify WebView that fullscreen is done
+        callback?.onCustomViewHidden()
+
+        // Clear references
+        webViewContainer = null
+        webView = null
     }
 }
 
@@ -101,14 +146,26 @@ fun HueTubeApp() {
     val fullscreenManager = remember { FullscreenManager(activity) }
 
     var isFullscreen by remember { mutableStateOf(false) }
+    var fullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    // ── Single WebView — created once, never recreated ──────────
-    val webView = remember {
-        WebView(context).apply {
-            setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+    // ── Container — permanent, never recreated ──────────────────
+    val container = remember {
+        FrameLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+        }
+    }
+
+    // ── Single WebView — created once ───────────────────────────
+    val webView = remember {
+        WebView(context).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
             with(settings) {
                 javaScriptEnabled = true
@@ -123,12 +180,15 @@ fun HueTubeApp() {
 
             webChromeClient = object : WebChromeClient() {
                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                    fullscreenCallback = callback
                     isFullscreen = true
-                    fullscreenManager.enterFullscreen()
+                    fullscreenManager.enterFullscreen(view, callback, container, this@apply)
                 }
+
                 override fun onHideCustomView() {
+                    fullscreenManager.exitFullscreen(fullscreenCallback)
+                    fullscreenCallback = null
                     isFullscreen = false
-                    fullscreenManager.exitFullscreen()
                 }
             }
 
@@ -163,24 +223,33 @@ fun HueTubeApp() {
         }
     }
 
-    // ── Back Handler (no refresh) ───────────────────────────────
+    // ── Add WebView to container on init ────────────────────────
+    LaunchedEffect(Unit) {
+        container.addView(webView)
+    }
+
+    // ── Back Handler ────────────────────────────────────────────
     BackHandler {
         if (isFullscreen) {
+            // Exit fullscreen properly via callback
+            fullscreenManager.exitFullscreen(fullscreenCallback)
+            fullscreenCallback = null
             isFullscreen = false
-            fullscreenManager.exitFullscreen()
             return@BackHandler
         }
 
+        val currentUrl = webView.url ?: ""
+
         when {
             webView.canGoBack() -> webView.goBack()
-            webView.url == HOMEPAGE_URL || webView.url == "about:blank" -> activity.finish()
+            currentUrl.startsWith(HOMEPAGE_URL) || currentUrl == "about:blank" -> activity.finish()
             else -> webView.loadUrl(HOMEPAGE_URL)
         }
     }
 
     // ── Layout ───────────────────────────────────────────────────
     AndroidView(
-        factory = { webView },
+        factory = { container },
         modifier = Modifier
             .fillMaxSize()
             .background(BG)
