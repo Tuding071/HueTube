@@ -1,17 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.3 (Fullscreen Landscape/Potrait Rotation)
+// HueTube - V1.4 (Fullscreen Portrait+Landscape + Orientation Restore)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // THEME: Dark YouTube — Near-Black Background
 //
-// Fullscreen: website requests orientation → phone rotates first →
-//             then custom view added to decorView.
+// Fullscreen: website requests orientation → SENSOR allows both portrait
+//             and landscape → orientation saved before entry, restored on exit.
 //             No Activity recreation (configChanges handles it).
 //
 // Back navigation:
-//   FULLSCREEN → exit fullscreen via callback
+//   FULLSCREEN → exit fullscreen via callback + restore orientation
 //   canGoBack  → goBack()
 //   on homepage → exit app
 //   elsewhere  → go to homepage
@@ -66,6 +66,17 @@ private const val HOMEPAGE_URL = "https://m.youtube.com"
 // ═══════════════════════════════════════════════════════════════════
 // === PART 3/10 — Fullscreen Manager ===
 // ═══════════════════════════════════════════════════════════════════
+//
+// FIXES in V1.4:
+//   1. savedOrientation — captured before entry, restored on exit
+//      (fixes: back/swipe-down not restoring original orientation)
+//   2. SCREEN_ORIENTATION_SENSOR — allows both portrait and landscape
+//      fullscreen freely based on device hold
+//      (fixes: portrait fullscreen broken by forced landscape)
+//   3. isActive guard — prevents double-exit when back button and
+//      onHideCustomView both fire in the same event chain
+//
+// ═══════════════════════════════════════════════════════════════════
 
 class FullscreenManager(val activity: android.app.Activity) {
 
@@ -73,20 +84,36 @@ class FullscreenManager(val activity: android.app.Activity) {
     private var webViewContainer: FrameLayout? = null
     private var webView: WebView? = null
 
+    // Saved before enterFullscreen so exitFullscreen restores it exactly
+    private var savedOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+    // Guard: prevents double-call from back handler + onHideCustomView
+    private var isActive: Boolean = false
+
     fun enterFullscreen(
         view: View,
         callback: WebChromeClient.CustomViewCallback,
         container: FrameLayout,
         wv: WebView
     ) {
+        if (isActive) return
+        isActive = true
+
         // Save references
         customView = view
         webViewContainer = container
         webView = wv
 
-        // Rotate to landscape before going fullscreen
-        // YouTube videos always want landscape for fullscreen
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // ── Save current orientation BEFORE changing it ──────────
+        // This is what exitFullscreen restores, so back button and
+        // onHideCustomView both snap back to exactly where we were.
+        savedOrientation = activity.requestedOrientation
+
+        // ── Free sensor rotation — portrait AND landscape both work ──
+        // SENSOR_LANDSCAPE (old) forced landscape, breaking portrait
+        // fullscreen (e.g. Shorts). SENSOR lets the device decide based
+        // on how the user is holding it — YouTube content fills correctly.
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
 
         // Remove WebView from container
         container.removeView(wv)
@@ -101,16 +128,21 @@ class FullscreenManager(val activity: android.app.Activity) {
 
         // Hide system bars
         decorView.systemUiVisibility = (
-            android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         )
     }
 
     fun exitFullscreen(callback: WebChromeClient.CustomViewCallback?) {
+        // Guard: if back button and onHideCustomView both fire,
+        // only the first call executes — second is a no-op.
+        if (!isActive) return
+        isActive = false
+
         val decorView = activity.window.decorView as android.widget.FrameLayout
 
         // Remove custom view from decor view
@@ -127,10 +159,13 @@ class FullscreenManager(val activity: android.app.Activity) {
         }
 
         // Restore system bars
-        decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+        decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
 
-        // Unlock orientation — let the sensor decide
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        // ── Restore saved orientation ────────────────────────────
+        // Previously this was UNSPECIFIED unconditionally, so if the
+        // user entered fullscreen while locked to portrait, it would
+        // unlock after exit. Now it restores exactly what it was.
+        activity.requestedOrientation = savedOrientation
 
         // Notify WebView that fullscreen is done
         callback?.onCustomViewHidden()
@@ -240,7 +275,7 @@ fun HueTubeApp() {
     // ── Back Handler ────────────────────────────────────────────
     BackHandler {
         if (isFullscreen) {
-            // Exit fullscreen properly via callback
+            // Exit fullscreen properly via callback — orientation restores
             fullscreenManager.exitFullscreen(fullscreenCallback)
             fullscreenCallback = null
             isFullscreen = false
