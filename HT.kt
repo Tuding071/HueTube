@@ -263,8 +263,6 @@ private fun String.unescJ() = replace("\\\"", "\"").replace("\\\\", "\\")
 
 object ScriptletLibrary {
 
-    // json-prune: intercept fetch+XHR, remove specified keys from JSON responses
-    // args format: "key1 key2 key3"
     private val JSON_PRUNE = """
 (function(args) {
     var keys = args.trim().split(/\s+/).filter(Boolean);
@@ -291,7 +289,6 @@ object ScriptletLibrary {
             return JSON.stringify(obj);
         } catch(e) { return text; }
     }
-    // Intercept fetch
     var origFetch = window.fetch;
     window.fetch = function() {
         return origFetch.apply(this, arguments).then(function(resp) {
@@ -303,12 +300,9 @@ object ScriptletLibrary {
             });
         });
     };
-    // Intercept XHR
-    var origOpen = XMLHttpRequest.prototype.open;
     var origSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function() {
         var xhr = this;
-        var origOnReadyStateChange = xhr.onreadystatechange;
         Object.defineProperty(xhr, 'responseText', {
             get: function() {
                 var raw = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
@@ -322,25 +316,29 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // set-constant: force window.PROP = VALUE
-    // args format: "property value"
     private val SET_CONSTANT = """
 (function(args) {
     var parts = args.trim().match(/^(\S+)\s+(.+)$/);
     if (!parts) return;
     var prop = parts[1], val = parts[2];
     var value;
-    if (val === 'true')       value = true;
-    else if (val === 'false') value = false;
-    else if (val === 'null')  value = null;
+    if (val === 'true')           value = true;
+    else if (val === 'false')     value = false;
+    else if (val === 'null')      value = null;
     else if (val === 'undefined') value = undefined;
-    else if (val === "''")    value = '';
-    else if (!isNaN(val))     value = Number(val);
-    else                      value = val;
+    else if (val === "''")        value = '';
+    else if (!isNaN(val))         value = Number(val);
+    else                          value = val;
     var chain = prop.split('.');
     function setDeep(obj, parts, v) {
         if (parts.length === 1) {
-            try { Object.defineProperty(obj, parts[0], { get: function(){ return v; }, set: function(){}, configurable: false }); } catch(e) {}
+            try {
+                Object.defineProperty(obj, parts[0], {
+                    get: function(){ return v; },
+                    set: function(){},
+                    configurable: false
+                });
+            } catch(e) {}
             return;
         }
         if (!obj[parts[0]]) obj[parts[0]] = {};
@@ -350,8 +348,6 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // abort-on-property-read: throw when a property is accessed
-    // args format: "property"
     private val ABORT_ON_PROPERTY_READ = """
 (function(args) {
     var prop = args.trim();
@@ -374,8 +370,6 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // abort-on-property-write: throw when a property is written
-    // args format: "property"
     private val ABORT_ON_PROPERTY_WRITE = """
 (function(args) {
     var prop = args.trim();
@@ -398,13 +392,11 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // no-xhr-if: block XHR requests whose URL matches pattern
-    // args format: "urlPattern"
     private val NO_XHR_IF = """
 (function(args) {
     var pattern = args.trim();
     if (!pattern) return;
-    var re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*'));
+    var re = new RegExp(pattern.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\${'$'}&').replace(/\\\*/g, '.*'));
     var origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
         if (re.test(url)) {
@@ -420,13 +412,11 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // no-fetch-if: block fetch requests whose URL matches pattern
-    // args format: "urlPattern"
     private val NO_FETCH_IF = """
 (function(args) {
     var pattern = args.trim();
     if (!pattern) return;
-    var re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*'));
+    var re = new RegExp(pattern.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\${'$'}&').replace(/\\\*/g, '.*'));
     var origFetch = window.fetch;
     window.fetch = function(input, init) {
         var url = typeof input === 'string' ? input : (input && input.url) || '';
@@ -436,8 +426,6 @@ object ScriptletLibrary {
 })("ARGS");
 """.trimIndent()
 
-    // addEventListener-defuser: prevent specific event listeners from being added
-    // args format: "eventType handlerPattern"
     private val ADD_EVENT_LISTENER_DEFUSER = """
 (function(args) {
     var parts = args.trim().split(/\s+/);
@@ -455,22 +443,20 @@ object ScriptletLibrary {
 """.trimIndent()
 
     private val IMPLEMENTATIONS = mapOf(
-        "json-prune"                 to JSON_PRUNE,
-        "set-constant"               to SET_CONSTANT,
-        "abort-on-property-read"     to ABORT_ON_PROPERTY_READ,
-        "abort-on-property-write"    to ABORT_ON_PROPERTY_WRITE,
-        "no-xhr-if"                  to NO_XHR_IF,
-        "no-fetch-if"                to NO_FETCH_IF,
-        "addEventListener-defuser"   to ADD_EVENT_LISTENER_DEFUSER
+        "json-prune"               to JSON_PRUNE,
+        "set-constant"             to SET_CONSTANT,
+        "abort-on-property-read"   to ABORT_ON_PROPERTY_READ,
+        "abort-on-property-write"  to ABORT_ON_PROPERTY_WRITE,
+        "no-xhr-if"                to NO_XHR_IF,
+        "no-fetch-if"              to NO_FETCH_IF,
+        "addEventListener-defuser" to ADD_EVENT_LISTENER_DEFUSER
     )
 
-    // Build the full injection JS for a list of scriptlet rules
     fun buildInjectionJs(rules: List<ScriptletRule>): String {
         val sb = StringBuilder()
         sb.append("(function(){\n'use strict';\n")
         rules.forEach { rule ->
             val impl = IMPLEMENTATIONS[rule.name] ?: return@forEach
-            // Replace ARGS placeholder with actual args, escaping for JS string safety
             val escaped = rule.args.replace("\\", "\\\\").replace("\"", "\\\"")
             sb.append(impl.replace("\"ARGS\"", "\"$escaped\""))
             sb.append("\n")
@@ -481,6 +467,7 @@ object ScriptletLibrary {
 }
 
 // END OF PART 5/10
+
 
 
 // ═══════════════════════════════════════════════════════════════════
