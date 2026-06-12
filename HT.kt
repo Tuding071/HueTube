@@ -1,27 +1,39 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.6 (Remote JS Ad Blocker)
+// HueTube - V1.6 (Hardcoded Ad Blocker + Bottom Sheet)
 // ═══════════════════════════════════════════════════════════════════
-// === PART 0/10 — Theme Specification ===
+// === PART 0/10 — Theme + Maintenance Guide ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// THEME: Dark YouTube — Near-Black Background
+// THEME: Dark YouTube — Near-Black Background (#0A0A0A)
 //
-// Ad Blocker:
-//   - Fetches a remote adblocker.js from GitHub Gist (or any raw URL)
-//   - Caches it to app private storage
-//   - Injects on every page load via onPageStarted
-//   - Toggle in bottom sheet enables/disables injection
-//   - Update button re-fetches and saves latest JS
-//   - When ads break: edit the remote JS, user taps Update — done
-//   - No app rebuild needed for ad blocker changes
+// ── AD BLOCKER MAINTENANCE ────────────────────────────────────────
 //
-// Bottom Sheet:
-//   - Floating 3-line button bottom-left opens it
-//   - Ad block toggle + update button on top
-//   - Space below reserved for future features
+// When ads break, go to PART 5 and update AD_BLOCK_JS.
+// That's the only thing that ever needs changing for ad blocking.
 //
-// Fullscreen: SENSOR orientation, saved+restored on exit
-// Back: fullscreen → sheet → goBack → homepage → exit
+// To update it:
+//   1. Open this file with any AI (Claude, ChatGPT, etc.)
+//   2. Say: "YouTube ads are showing again, update AD_BLOCK_JS
+//            in PART 5 with the latest working ad block script"
+//   3. Replace PART 5 with what the AI gives you
+//   4. Rebuild via GitHub Actions
+//
+// What AD_BLOCK_JS does:
+//   - Intercepts fetch() calls to YouTube's internal player API
+//   - Strips adPlacements / playerAds / adSlots keys from JSON
+//   - Injects CSS to hide any leftover ad UI elements
+//   - Uses MutationObserver so it survives YouTube's SPA navigation
+//
+// ── FULLSCREEN ────────────────────────────────────────────────────
+//   SENSOR orientation — portrait and landscape both work freely
+//   Orientation saved before entry, restored on exit
+//
+// ── BACK NAVIGATION ──────────────────────────────────────────────
+//   Fullscreen → exit fullscreen
+//   Sheet open → close sheet
+//   canGoBack  → goBack
+//   On homepage → exit app
+//   Elsewhere  → go to homepage
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -32,7 +44,6 @@
 
 package com.huetube.app
 
-import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.View
@@ -59,11 +70,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.URL
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,15 +92,7 @@ private val TEXT_PRI = Color(0xFFEEEEEE)
 private val TEXT_SEC = Color(0xFF888888)
 private val DIVIDER  = Color(0xFF222222)
 
-private const val HOMEPAGE_URL  = "https://m.youtube.com"
-private const val JS_FILENAME   = "ht_adblock.js"
-private const val META_FILENAME = "ht_adblock_meta.txt"
-
-// ── Remote JS URL ─────────────────────────────────────────────────
-// Point this at your GitHub Gist raw URL or any hosted JS file.
-// Edit that file when ads break — users tap Update and it applies.
-private const val REMOTE_JS_URL =
-    "https://gist.githubusercontent.com/YOUR_USERNAME/YOUR_GIST_ID/raw/ht_adblock.js"
+private const val HOMEPAGE_URL = "https://m.youtube.com"
 
 // END OF PART 2/10
 
@@ -120,10 +118,10 @@ class FullscreenManager(val activity: android.app.Activity) {
         if (isActive) return
         isActive = true
 
-        customView        = view
-        webViewContainer  = container
-        webView           = wv
-        savedOrientation  = activity.requestedOrientation
+        customView       = view
+        webViewContainer = container
+        webView          = wv
+        savedOrientation = activity.requestedOrientation
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
 
         container.removeView(wv)
@@ -171,61 +169,11 @@ class FullscreenManager(val activity: android.app.Activity) {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 4/10 — Ad Blocker Repository ===
+// === PART 4/10 — Dark Mode JS ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// AdBlockRepo:
-//   loadJs()   — reads cached JS from disk, returns null if none
-//   loadMeta() — returns last-updated timestamp string
-//   update()   — fetches REMOTE_JS_URL, saves JS + timestamp to disk
-//
-// Files saved to app.filesDir:
-//   ht_adblock.js       — the raw injected JS
-//   ht_adblock_meta.txt — "Updated YYYY-MM-DD HH:mm"
-//
-// ═══════════════════════════════════════════════════════════════════
-
-class AdBlockRepo(private val ctx: Context) {
-
-    private val jsFile   get() = File(ctx.filesDir, JS_FILENAME)
-    private val metaFile get() = File(ctx.filesDir, META_FILENAME)
-
-    fun loadJs(): String? {
-        if (!jsFile.exists()) return null
-        return try { jsFile.readText().takeIf { it.isNotBlank() } } catch (e: Exception) { null }
-    }
-
-    fun loadMeta(): String {
-        if (!metaFile.exists()) return ""
-        return try { metaFile.readText().trim() } catch (e: Exception) { "" }
-    }
-
-    suspend fun update(): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            val js = URL(REMOTE_JS_URL).readText()
-            if (js.isBlank()) return@withContext Result.failure(Exception("Empty response"))
-            jsFile.writeText(js)
-            val ts = java.text.SimpleDateFormat(
-                "yyyy-MM-dd HH:mm", java.util.Locale.getDefault()
-            ).format(java.util.Date())
-            val meta = "Updated $ts"
-            metaFile.writeText(meta)
-            Result.success(meta)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-}
-
-// END OF PART 4/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Dark Mode JS (always injected) ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// This runs on every page load regardless of ad block toggle.
-// Keeps YouTube in dark mode and sets the dark cookie.
+// Always injected regardless of ad block toggle.
+// Forces YouTube dark mode and sets the dark preference cookie.
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -249,6 +197,101 @@ private val DARK_MODE_JS = """
         return r;
     };
     document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
+})();
+""".trimIndent()
+
+// END OF PART 4/10
+
+
+// ═══════════════════════════════════════════════════════════════════
+// === PART 5/10 — Ad Block JS ===
+// ═══════════════════════════════════════════════════════════════════
+//
+// !! THIS IS THE ONLY PART THAT NEEDS UPDATING WHEN ADS BREAK !!
+//
+// To update:
+//   1. Open this file with any AI assistant
+//   2. Say: "YouTube ads are showing again, update AD_BLOCK_JS
+//            in PART 5 with the latest working ad block script
+//            for WebView injection"
+//   3. Replace this entire PART 5 with what the AI provides
+//   4. Push to GitHub and rebuild via Actions
+//
+// Last updated: 2025-06
+//
+// What this does:
+//   - Patches window.fetch to intercept YouTube's player API calls
+//     (/youtubei/v1/player) and strips ad-related keys from the
+//     JSON response before YouTube's player reads them
+//   - Injects CSS to hide any residual ad UI elements
+//   - MutationObserver re-injects CSS on SPA navigation
+//
+// ═══════════════════════════════════════════════════════════════════
+
+private val AD_BLOCK_JS = """
+(function(){
+    'use strict';
+
+    // ── 1. Patch fetch — strip ad keys from player API response ──
+    var _fetch = window.fetch;
+    window.fetch = function(input, init) {
+        return _fetch.apply(this, arguments).then(function(resp) {
+            var url = typeof input === 'string' ? input : (input && input.url) || '';
+            if (!url.includes('/youtubei/')) return resp;
+            return resp.clone().text().then(function(text) {
+                try {
+                    var obj = JSON.parse(text);
+                    delete obj.adPlacements;
+                    delete obj.playerAds;
+                    delete obj.adSlots;
+                    delete obj.auxiliaryUi;
+                    if (obj.playerConfig && obj.playerConfig.adConfig) {
+                        delete obj.playerConfig.adConfig;
+                    }
+                    return new Response(JSON.stringify(obj), {
+                        status: resp.status,
+                        statusText: resp.statusText,
+                        headers: resp.headers
+                    });
+                } catch(e) {
+                    return resp;
+                }
+            });
+        });
+    };
+
+    // ── 2. CSS — hide leftover ad UI elements ────────────────────
+    var CSS = [
+        '#player-ads',
+        '.ad-showing',
+        '.ad-interrupting',
+        'ytd-promoted-sparkles-web-renderer',
+        'ytd-action-companion-ad-renderer',
+        'ytd-display-ad-renderer',
+        'ytd-video-masthead-ad-v3-renderer',
+        'ytd-overlay-interstitial-promo-renderer',
+        'ytd-banner-promo-renderer',
+        '.ytp-ad-overlay-container',
+        '.ytp-ad-text-overlay',
+        '.ytp-ad-skip-button-container',
+        '.ytp-ad-skip-button-modern',
+        '.ytp-ad-module'
+    ].join(',');
+
+    function injectCss() {
+        if (document.getElementById('__ht_adcss__')) return;
+        var s = document.createElement('style');
+        s.id = '__ht_adcss__';
+        s.textContent = CSS + '{display:none!important;visibility:hidden!important;}';
+        (document.head || document.documentElement).appendChild(s);
+    }
+
+    injectCss();
+    new MutationObserver(injectCss).observe(
+        document.documentElement,
+        { childList: true, subtree: true }
+    );
+
 })();
 """.trimIndent()
 
@@ -284,9 +327,6 @@ private val DARK_MODE_JS = """
 fun HueTubeBottomSheet(
     adBlockEnabled: Boolean,
     onToggleAdBlock: (Boolean) -> Unit,
-    updateStatus: String,
-    isUpdating: Boolean,
-    onUpdate: () -> Unit,
     onDismiss: () -> Unit
 ) {
     // Scrim
@@ -346,7 +386,8 @@ fun HueTubeBottomSheet(
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        "Injected on every page load",
+                        if (adBlockEnabled) "Active — injected on every page"
+                        else "Disabled",
                         color = TEXT_SEC,
                         fontSize = 12.sp
                     )
@@ -363,60 +404,6 @@ fun HueTubeBottomSheet(
                 )
             }
 
-            Spacer(Modifier.height(4.dp))
-            HorizontalDivider(
-                color = DIVIDER,
-                thickness = 0.5.dp,
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // ── Update Rules ──────────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                    Text(
-                        "Blocker Script",
-                        color = TEXT_PRI,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        updateStatus.ifEmpty { "No script cached yet" },
-                        color = if (updateStatus.startsWith("Failed")) Color(0xFFCC4444)
-                                else TEXT_SEC,
-                        fontSize = 12.sp
-                    )
-                }
-                Button(
-                    onClick = onUpdate,
-                    enabled = !isUpdating,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor         = Color(0xFF222222),
-                        contentColor           = TEXT_PRI,
-                        disabledContainerColor = Color(0xFF1A1A1A),
-                        disabledContentColor   = TEXT_SEC
-                    )
-                ) {
-                    if (isUpdating) {
-                        CircularProgressIndicator(
-                            modifier    = Modifier.size(14.dp),
-                            color       = TEXT_SEC,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Update", fontSize = 13.sp)
-                    }
-                }
-            }
-
             Spacer(Modifier.height(8.dp))
             HorizontalDivider(
                 color = DIVIDER,
@@ -424,7 +411,7 @@ fun HueTubeBottomSheet(
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
 
-            // ── Future features below ─────────────────────────────
+            // ── Future features below this line ───────────────────
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -441,29 +428,13 @@ fun HueTubeBottomSheet(
 fun HueTubeApp() {
     val context  = LocalContext.current
     val activity = context as? android.app.Activity ?: return
-    val scope    = rememberCoroutineScope()
-    val repo     = remember { AdBlockRepo(context) }
 
     val fullscreenManager = remember { FullscreenManager(activity) }
 
-    // ── State ────────────────────────────────────────────────────
     var isFullscreen       by remember { mutableStateOf(false) }
     var fullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var showSheet          by remember { mutableStateOf(false) }
     var adBlockEnabled     by remember { mutableStateOf(true) }
-    var isUpdating         by remember { mutableStateOf(false) }
-    var updateStatus       by remember { mutableStateOf("") }
-    var cachedJs           by remember { mutableStateOf<String?>(null) }
-
-    // Load cached JS + meta on start
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            val js   = repo.loadJs()
-            val meta = repo.loadMeta()
-            cachedJs     = js
-            updateStatus = meta
-        }
-    }
 
     // ── Permanent container ──────────────────────────────────────
     val container = remember {
@@ -475,9 +446,6 @@ fun HueTubeApp() {
             setBackgroundColor(android.graphics.Color.parseColor("#0A0A0A"))
         }
     }
-
-    // Keep a ref to inject updated JS after an update without reload
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     // ── Single WebView ───────────────────────────────────────────
     val webView = remember {
@@ -517,14 +485,9 @@ fun HueTubeApp() {
                     url: String,
                     favicon: android.graphics.Bitmap?
                 ) {
-                    // Always inject dark mode
                     view.evaluateJavascript(DARK_MODE_JS, null)
-
-                    // Inject ad blocker JS if enabled and cached
                     if (adBlockEnabled) {
-                        cachedJs?.let { js ->
-                            view.evaluateJavascript(js, null)
-                        }
+                        view.evaluateJavascript(AD_BLOCK_JS, null)
                     }
                 }
             }
@@ -533,10 +496,6 @@ fun HueTubeApp() {
         }
     }
 
-    // Store ref for post-update injection
-    LaunchedEffect(webView) { webViewRef.value = webView }
-
-    // Add WebView to container once
     LaunchedEffect(Unit) { container.addView(webView) }
 
     // ── Back Handler ─────────────────────────────────────────────
@@ -599,24 +558,7 @@ fun HueTubeApp() {
             HueTubeBottomSheet(
                 adBlockEnabled  = adBlockEnabled,
                 onToggleAdBlock = { adBlockEnabled = it },
-                updateStatus    = updateStatus,
-                isUpdating      = isUpdating,
-                onUpdate        = {
-                    scope.launch {
-                        isUpdating   = true
-                        updateStatus = "Fetching..."
-                        val result   = repo.update()
-                        result.onSuccess { meta ->
-                            cachedJs     = repo.loadJs()
-                            updateStatus = meta
-                        }
-                        result.onFailure { e ->
-                            updateStatus = "Failed: ${e.message?.take(40) ?: "unknown error"}"
-                        }
-                        isUpdating = false
-                    }
-                },
-                onDismiss = { showSheet = false }
+                onDismiss       = { showSheet = false }
             )
         }
     }
