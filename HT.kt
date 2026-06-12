@@ -1,35 +1,33 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.5 (Ad Blocker + Sliding Bottom Sheet)
+// HueTube - V1.6 (Remote JS Ad Blocker)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme Specification ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // THEME: Dark YouTube — Near-Black Background
 //
-// Fullscreen: website requests orientation → SENSOR allows both portrait
-//             and landscape → orientation saved before entry, restored on exit.
-//             No Activity recreation (configChanges handles it).
-//
-// Back navigation:
-//   FULLSCREEN → exit fullscreen via callback + restore orientation
-//   canGoBack  → goBack()
-//   on homepage → exit app
-//   elsewhere  → go to homepage
-//
 // Ad Blocker:
-//   - Toggle (enabled by default) in bottom sheet
-//   - Update button fetches uBlock filter txt from GitHub
-//   - Parses youtube.com rules: scriptlets, cosmetic, network
-//   - Scriptlet engine: bundled JS implementations, rules drive args
-//   - Cosmetic: CSS injection via <style> tag
-//   - Network: shouldInterceptRequest blocks matched URLs
-//   - Rules saved to app private storage, loaded on each page
+//   - Fetches a remote adblocker.js from GitHub Gist (or any raw URL)
+//   - Caches it to app private storage
+//   - Injects on every page load via onPageStarted
+//   - Toggle in bottom sheet enables/disables injection
+//   - Update button re-fetches and saves latest JS
+//   - When ads break: edit the remote JS, user taps Update — done
+//   - No app rebuild needed for ad blocker changes
+//
+// Bottom Sheet:
+//   - Floating 3-line button bottom-left opens it
+//   - Ad block toggle + update button on top
+//   - Space below reserved for future features
+//
+// Fullscreen: SENSOR orientation, saved+restored on exit
+// Back: fullscreen → sheet → goBack → homepage → exit
 //
 // ═══════════════════════════════════════════════════════════════════
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 1/10 — Package, Imports, MainActivity ===
+// === PART 1/10 — Package + Imports + MainActivity ===
 // ═══════════════════════════════════════════════════════════════════
 
 package com.huetube.app
@@ -44,8 +42,6 @@ import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -83,19 +79,22 @@ class MainActivity : ComponentActivity() {
 // === PART 2/10 — Constants ===
 // ═══════════════════════════════════════════════════════════════════
 
-private val BG         = Color(0xFF0A0A0A)
-private val SHEET_BG   = Color(0xFF141414)
-private val ACCENT     = Color(0xFFFF0000)
-private val TEXT_PRI   = Color(0xFFEEEEEE)
-private val TEXT_SEC   = Color(0xFF888888)
-private val DIVIDER    = Color(0xFF222222)
+private val BG       = Color(0xFF0A0A0A)
+private val SHEET_BG = Color(0xFF141414)
+private val ACCENT   = Color(0xFFFF0000)
+private val TEXT_PRI = Color(0xFFEEEEEE)
+private val TEXT_SEC = Color(0xFF888888)
+private val DIVIDER  = Color(0xFF222222)
 
-private const val HOMEPAGE_URL   = "https://m.youtube.com"
-private const val RULES_FILENAME = "yt_adblocker_rules.json"
+private const val HOMEPAGE_URL  = "https://m.youtube.com"
+private const val JS_FILENAME   = "ht_adblock.js"
+private const val META_FILENAME = "ht_adblock_meta.txt"
 
-// uBlock core filters — primary source for youtube.com rules
-private const val UBLOCK_FILTERS_URL =
-    "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt"
+// ── Remote JS URL ─────────────────────────────────────────────────
+// Point this at your GitHub Gist raw URL or any hosted JS file.
+// Edit that file when ads break — users tap Update and it applies.
+private const val REMOTE_JS_URL =
+    "https://gist.githubusercontent.com/YOUR_USERNAME/YOUR_GIST_ID/raw/ht_adblock.js"
 
 // END OF PART 2/10
 
@@ -121,10 +120,10 @@ class FullscreenManager(val activity: android.app.Activity) {
         if (isActive) return
         isActive = true
 
-        customView = view
-        webViewContainer = container
-        webView = wv
-        savedOrientation = activity.requestedOrientation
+        customView        = view
+        webViewContainer  = container
+        webView           = wv
+        savedOrientation  = activity.requestedOrientation
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
 
         container.removeView(wv)
@@ -135,7 +134,6 @@ class FullscreenManager(val activity: android.app.Activity) {
             FrameLayout.LayoutParams.MATCH_PARENT
         )
         decorView.addView(view)
-
         decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_FULLSCREEN
             or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -155,8 +153,8 @@ class FullscreenManager(val activity: android.app.Activity) {
         customView = null
 
         webView?.let { wv ->
-            webViewContainer?.let { container ->
-                if (wv.parent == null) container.addView(wv)
+            webViewContainer?.let { c ->
+                if (wv.parent == null) c.addView(wv)
             }
         }
 
@@ -165,7 +163,7 @@ class FullscreenManager(val activity: android.app.Activity) {
         callback?.onCustomViewHidden()
 
         webViewContainer = null
-        webView = null
+        webView          = null
     }
 }
 
@@ -173,440 +171,65 @@ class FullscreenManager(val activity: android.app.Activity) {
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 4/10 — Parsed Rules Data Model ===
+// === PART 4/10 — Ad Blocker Repository ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// ParsedRules holds three categories extracted from the filter txt:
-//   scriptlets  — list of ScriptletRule(name, args)
-//   cosmetic    — list of CSS selector strings
-//   network     — list of URL substring patterns to block
+// AdBlockRepo:
+//   loadJs()   — reads cached JS from disk, returns null if none
+//   loadMeta() — returns last-updated timestamp string
+//   update()   — fetches REMOTE_JS_URL, saves JS + timestamp to disk
 //
-// Serialized as JSON to RULES_FILENAME in app files dir.
-// Loaded at startup; refreshed when user taps Update.
-//
-// ═══════════════════════════════════════════════════════════════════
-
-data class ScriptletRule(val name: String, val args: String)
-
-data class ParsedRules(
-    val scriptlets: List<ScriptletRule> = emptyList(),
-    val cosmetic:   List<String>        = emptyList(),
-    val network:    List<String>        = emptyList(),
-    val updatedAt:  String              = ""
-)
-
-// Simple JSON serializer — no Gson dependency needed
-fun ParsedRules.toJson(): String {
-    val sb = StringBuilder()
-    sb.append("{")
-    sb.append("\"updatedAt\":\"${updatedAt}\",")
-    sb.append("\"scriptlets\":[")
-    scriptlets.forEachIndexed { i, r ->
-        if (i > 0) sb.append(",")
-        sb.append("{\"name\":\"${r.name.escJ()}\",\"args\":\"${r.args.escJ()}\"}")
-    }
-    sb.append("],")
-    sb.append("\"cosmetic\":[")
-    cosmetic.forEachIndexed { i, s ->
-        if (i > 0) sb.append(",")
-        sb.append("\"${s.escJ()}\"")
-    }
-    sb.append("],")
-    sb.append("\"network\":[")
-    network.forEachIndexed { i, s ->
-        if (i > 0) sb.append(",")
-        sb.append("\"${s.escJ()}\"")
-    }
-    sb.append("]}")
-    return sb.toString()
-}
-
-private fun String.escJ() = replace("\\", "\\\\").replace("\"", "\\\"")
-
-fun parseJsonRules(json: String): ParsedRules {
-    return try {
-        val updatedAt  = Regex("\"updatedAt\":\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1) ?: ""
-        val scriptlets = Regex("\\{\"name\":\"([^\"]*)\",\"args\":\"([^\"]*)\"\\}")
-            .findAll(json).map { ScriptletRule(it.groupValues[1].unescJ(), it.groupValues[2].unescJ()) }.toList()
-        val cosmetic   = Regex("\"cosmetic\":\\[([^\\]]*)]").find(json)?.groupValues?.get(1)
-            ?.let { Regex("\"([^\"]*)\"").findAll(it).map { m -> m.groupValues[1].unescJ() }.toList() } ?: emptyList()
-        val network    = Regex("\"network\":\\[([^\\]]*)]").find(json)?.groupValues?.get(1)
-            ?.let { Regex("\"([^\"]*)\"").findAll(it).map { m -> m.groupValues[1].unescJ() }.toList() } ?: emptyList()
-        ParsedRules(scriptlets, cosmetic, network, updatedAt)
-    } catch (e: Exception) {
-        ParsedRules()
-    }
-}
-
-private fun String.unescJ() = replace("\\\"", "\"").replace("\\\\", "\\")
-
-// END OF PART 4/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Scriptlet Library ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// Bundled JS implementations for the scriptlets YouTube actually uses.
-// Keys match the names found in uBlock filter rules after ##+js(
-//
-// Implemented:
-//   json-prune            — strips keys from fetch/XHR JSON responses
-//   set-constant          — forces a property to a fixed value
-//   abort-on-property-read — throws when JS reads a property
-//   abort-on-property-write— throws when JS writes a property
-//   no-xhr-if             — blocks XHR requests matching a pattern
-//   no-fetch-if           — blocks fetch requests matching a pattern
-//   addEventListener-defuser — prevents specific event listeners
+// Files saved to app.filesDir:
+//   ht_adblock.js       — the raw injected JS
+//   ht_adblock_meta.txt — "Updated YYYY-MM-DD HH:mm"
 //
 // ═══════════════════════════════════════════════════════════════════
 
-object ScriptletLibrary {
+class AdBlockRepo(private val ctx: Context) {
 
-    private val JSON_PRUNE = """
-(function(args) {
-    var keys = args.trim().split(/\s+/).filter(Boolean);
-    if (!keys.length) return;
-    function pruneObj(obj) {
-        if (!obj || typeof obj !== 'object') return obj;
-        keys.forEach(function(k) {
-            var parts = k.split('.');
-            var cur = obj;
-            for (var i = 0; i < parts.length - 1; i++) {
-                if (!cur || typeof cur !== 'object') return;
-                cur = cur[parts[i]];
-            }
-            if (cur && typeof cur === 'object') {
-                delete cur[parts[parts.length - 1]];
-            }
-        });
-        return obj;
+    private val jsFile   get() = File(ctx.filesDir, JS_FILENAME)
+    private val metaFile get() = File(ctx.filesDir, META_FILENAME)
+
+    fun loadJs(): String? {
+        if (!jsFile.exists()) return null
+        return try { jsFile.readText().takeIf { it.isNotBlank() } } catch (e: Exception) { null }
     }
-    function tryPrune(text) {
+
+    fun loadMeta(): String {
+        if (!metaFile.exists()) return ""
+        return try { metaFile.readText().trim() } catch (e: Exception) { "" }
+    }
+
+    suspend fun update(): Result<String> = withContext(Dispatchers.IO) {
         try {
-            var obj = JSON.parse(text);
-            pruneObj(obj);
-            return JSON.stringify(obj);
-        } catch(e) { return text; }
-    }
-    var origFetch = window.fetch;
-    window.fetch = function() {
-        return origFetch.apply(this, arguments).then(function(resp) {
-            var ct = resp.headers.get('content-type') || '';
-            if (!ct.includes('json')) return resp;
-            return resp.text().then(function(text) {
-                var pruned = tryPrune(text);
-                return new Response(pruned, { status: resp.status, headers: resp.headers });
-            });
-        });
-    };
-    var origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function() {
-        var xhr = this;
-        Object.defineProperty(xhr, 'responseText', {
-            get: function() {
-                var raw = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseText');
-                var text = raw ? raw.get.call(xhr) : '';
-                return tryPrune(text);
-            },
-            configurable: true
-        });
-        origSend.apply(this, arguments);
-    };
-})("ARGS");
-""".trimIndent()
-
-    private val SET_CONSTANT = """
-(function(args) {
-    var parts = args.trim().match(/^(\S+)\s+(.+)$/);
-    if (!parts) return;
-    var prop = parts[1], val = parts[2];
-    var value;
-    if (val === 'true')           value = true;
-    else if (val === 'false')     value = false;
-    else if (val === 'null')      value = null;
-    else if (val === 'undefined') value = undefined;
-    else if (val === "''")        value = '';
-    else if (!isNaN(val))         value = Number(val);
-    else                          value = val;
-    var chain = prop.split('.');
-    function setDeep(obj, parts, v) {
-        if (parts.length === 1) {
-            try {
-                Object.defineProperty(obj, parts[0], {
-                    get: function(){ return v; },
-                    set: function(){},
-                    configurable: false
-                });
-            } catch(e) {}
-            return;
-        }
-        if (!obj[parts[0]]) obj[parts[0]] = {};
-        setDeep(obj[parts[0]], parts.slice(1), v);
-    }
-    setDeep(window, chain, value);
-})("ARGS");
-""".trimIndent()
-
-    private val ABORT_ON_PROPERTY_READ = """
-(function(args) {
-    var prop = args.trim();
-    if (!prop) return;
-    var chain = prop.split('.');
-    function trap(obj, parts) {
-        if (parts.length === 1) {
-            try {
-                Object.defineProperty(obj, parts[0], {
-                    get: function() { throw new ReferenceError('HueTube: aborted read of ' + prop); },
-                    configurable: false
-                });
-            } catch(e) {}
-            return;
-        }
-        var cur = obj[parts[0]];
-        if (cur) trap(cur, parts.slice(1));
-    }
-    trap(window, chain);
-})("ARGS");
-""".trimIndent()
-
-    private val ABORT_ON_PROPERTY_WRITE = """
-(function(args) {
-    var prop = args.trim();
-    if (!prop) return;
-    var chain = prop.split('.');
-    function trap(obj, parts) {
-        if (parts.length === 1) {
-            try {
-                Object.defineProperty(obj, parts[0], {
-                    set: function() { throw new ReferenceError('HueTube: aborted write of ' + prop); },
-                    configurable: false
-                });
-            } catch(e) {}
-            return;
-        }
-        var cur = obj[parts[0]];
-        if (cur) trap(cur, parts.slice(1));
-    }
-    trap(window, chain);
-})("ARGS");
-""".trimIndent()
-
-    private val NO_XHR_IF = """
-(function(args) {
-    var pattern = args.trim();
-    if (!pattern) return;
-    var re = new RegExp(pattern.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\${'$'}&').replace(/\\\*/g, '.*'));
-    var origOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        if (re.test(url)) {
-            Object.defineProperty(this, '_blocked', { value: true });
-        }
-        return origOpen.apply(this, arguments);
-    };
-    var origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function() {
-        if (this._blocked) return;
-        return origSend.apply(this, arguments);
-    };
-})("ARGS");
-""".trimIndent()
-
-    private val NO_FETCH_IF = """
-(function(args) {
-    var pattern = args.trim();
-    if (!pattern) return;
-    var re = new RegExp(pattern.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\${'$'}&').replace(/\\\*/g, '.*'));
-    var origFetch = window.fetch;
-    window.fetch = function(input, init) {
-        var url = typeof input === 'string' ? input : (input && input.url) || '';
-        if (re.test(url)) return Promise.reject(new TypeError('HueTube: blocked fetch'));
-        return origFetch.apply(this, arguments);
-    };
-})("ARGS");
-""".trimIndent()
-
-    private val ADD_EVENT_LISTENER_DEFUSER = """
-(function(args) {
-    var parts = args.trim().split(/\s+/);
-    var evType = parts[0] || '';
-    var handlerPat = parts[1] || '';
-    var re = handlerPat ? new RegExp(handlerPat) : null;
-    var origAEL = EventTarget.prototype.addEventListener;
-    EventTarget.prototype.addEventListener = function(type, handler) {
-        if (type === evType) {
-            if (!re || re.test(handler.toString())) return;
-        }
-        return origAEL.apply(this, arguments);
-    };
-})("ARGS");
-""".trimIndent()
-
-    private val IMPLEMENTATIONS = mapOf(
-        "json-prune"               to JSON_PRUNE,
-        "set-constant"             to SET_CONSTANT,
-        "abort-on-property-read"   to ABORT_ON_PROPERTY_READ,
-        "abort-on-property-write"  to ABORT_ON_PROPERTY_WRITE,
-        "no-xhr-if"                to NO_XHR_IF,
-        "no-fetch-if"              to NO_FETCH_IF,
-        "addEventListener-defuser" to ADD_EVENT_LISTENER_DEFUSER
-    )
-
-    fun buildInjectionJs(rules: List<ScriptletRule>): String {
-        val sb = StringBuilder()
-        sb.append("(function(){\n'use strict';\n")
-        rules.forEach { rule ->
-            val impl = IMPLEMENTATIONS[rule.name] ?: return@forEach
-            val escaped = rule.args.replace("\\", "\\\\").replace("\"", "\\\"")
-            sb.append(impl.replace("\"ARGS\"", "\"$escaped\""))
-            sb.append("\n")
-        }
-        sb.append("})();")
-        return sb.toString()
-    }
-}
-
-// END OF PART 5/10
-
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 6/10 — Filter Parser ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// Parses raw uBlock/EasyList .txt filter files.
-// Extracts only rules applicable to youtube.com.
-//
-// Rule types parsed:
-//   youtube.com##+js(name, arg1 arg2)  → ScriptletRule
-//   youtube.com##.selector             → cosmetic CSS
-//   ||pattern^                         → network block pattern
-//
-// ═══════════════════════════════════════════════════════════════════
-
-object FilterParser {
-
-    // Scriptlet rule: youtube.com##+js(name, args...)
-    private val SCRIPTLET_RE = Regex("""^[^#]*youtube\.com[^#]*#\+js\(([^)]+)\)""")
-
-    // Cosmetic rule: youtube.com##selector
-    private val COSMETIC_RE  = Regex("""^[^#]*youtube\.com##(.+)$""")
-
-    // Network rule: ||pattern^  (not youtube.com itself)
-    private val NETWORK_RE   = Regex("""^\|\|([^|^]+)\^""")
-
-    // Domains to not block (whitelist — avoid breaking YouTube core)
-    private val NETWORK_WHITELIST = setOf(
-        "youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com",
-        "googleapis.com", "gstatic.com"
-    )
-
-    fun parse(txt: String): ParsedRules {
-        val scriptlets = mutableListOf<ScriptletRule>()
-        val cosmetic   = mutableListOf<String>()
-        val network    = mutableListOf<String>()
-
-        val seen = mutableSetOf<String>() // dedup
-
-        txt.lineSequence().forEach { rawLine ->
-            val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith("!")) return@forEach
-
-            // Scriptlet
-            SCRIPTLET_RE.find(line)?.let { m ->
-                val inner = m.groupValues[1].trim()
-                // inner = "name, arg1 arg2" or just "name"
-                val commaIdx = inner.indexOf(',')
-                val name = if (commaIdx >= 0) inner.substring(0, commaIdx).trim() else inner.trim()
-                val args = if (commaIdx >= 0) inner.substring(commaIdx + 1).trim() else ""
-                val key  = "$name|$args"
-                if (seen.add(key)) scriptlets.add(ScriptletRule(name, args))
-                return@forEach
-            }
-
-            // Cosmetic
-            COSMETIC_RE.find(line)?.let { m ->
-                val sel = m.groupValues[1].trim()
-                if (seen.add("css|$sel")) cosmetic.add(sel)
-                return@forEach
-            }
-
-            // Network — only non-YouTube domains
-            NETWORK_RE.find(line)?.let { m ->
-                val pattern = m.groupValues[1].trim()
-                val domain  = pattern.substringBefore("/").substringBefore("?")
-                if (NETWORK_WHITELIST.none { domain.endsWith(it) }) {
-                    if (seen.add("net|$pattern")) network.add(pattern)
-                }
-                return@forEach
-            }
-        }
-
-        val ts = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date())
-
-        return ParsedRules(scriptlets, cosmetic, network, ts)
-    }
-}
-
-// END OF PART 6/10
-
-
-// ═══════════════════════════════════════════════════════════════════
-// === PART 7/10 — Rule Fetcher + Local Storage ===
-// ═══════════════════════════════════════════════════════════════════
-//
-// RulesRepository:
-//   load()   — reads ParsedRules from app files dir (or empty if none)
-//   update() — fetches filter txt, parses, saves, returns result
-//
-// Storage: app.filesDir / RULES_FILENAME (JSON)
-// All IO on Dispatchers.IO
-//
-// ═══════════════════════════════════════════════════════════════════
-
-class RulesRepository(private val context: Context) {
-
-    private val file get() = File(context.filesDir, RULES_FILENAME)
-
-    fun load(): ParsedRules {
-        if (!file.exists()) return ParsedRules()
-        return try { parseJsonRules(file.readText()) } catch (e: Exception) { ParsedRules() }
-    }
-
-    suspend fun update(): Result<ParsedRules> = withContext(Dispatchers.IO) {
-        try {
-            val txt = URL(UBLOCK_FILTERS_URL).readText()
-            val rules = FilterParser.parse(txt)
-            file.writeText(rules.toJson())
-            Result.success(rules)
+            val js = URL(REMOTE_JS_URL).readText()
+            if (js.isBlank()) return@withContext Result.failure(Exception("Empty response"))
+            jsFile.writeText(js)
+            val ts = java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm", java.util.Locale.getDefault()
+            ).format(java.util.Date())
+            val meta = "Updated $ts"
+            metaFile.writeText(meta)
+            Result.success(meta)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 }
 
-// END OF PART 7/10
+// END OF PART 4/10
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 8/10 — Ad Blocker Engine ===
+// === PART 5/10 — Dark Mode JS (always injected) ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// AdBlocker:
-//   buildPageJs(rules)     — full JS to inject at onPageStarted
-//                            includes: dark mode patch + scriptlets + cosmetic
-//   shouldBlock(url)       — returns true if URL matches network rules
-//
-// Cosmetic injection: base64-encoded <style> added via JS to survive
-// YouTube's dynamic rendering and SPA navigation.
+// This runs on every page load regardless of ad block toggle.
+// Keeps YouTube in dark mode and sets the dark cookie.
 //
 // ═══════════════════════════════════════════════════════════════════
 
-object AdBlocker {
-
-    // Dark mode + cookie patch (was in V1.4 onPageStarted)
-    private val DARK_MODE_JS = """
+private val DARK_MODE_JS = """
 (function(){
     document.documentElement.style.setProperty('color-scheme','dark');
     document.documentElement.style.setProperty('background-color','#0A0A0A');
@@ -614,56 +237,41 @@ object AdBlocker {
     window.matchMedia = function(q) {
         var r = origMM(q);
         if (q.includes('prefers-color-scheme')) {
-            return { matches:true, media:q, onchange:null,
-                addListener:function(cb){cb(this);},
-                removeListener:function(){},
-                addEventListener:function(t,cb){if(t==='change')cb(this);},
-                removeEventListener:function(){},
-                dispatchEvent:function(){return true;} };
+            return {
+                matches: true, media: q, onchange: null,
+                addListener: function(cb){ cb(this); },
+                removeListener: function(){},
+                addEventListener: function(t,cb){ if(t==='change') cb(this); },
+                removeEventListener: function(){},
+                dispatchEvent: function(){ return true; }
+            };
         }
         return r;
     };
-    document.cookie='PREF=f6=4;path=/;domain=.youtube.com';
+    document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
 })();
 """.trimIndent()
 
-    // Cosmetic CSS injection via base64 <style> — survives SPA navigation
-    private fun buildCosmeticJs(selectors: List<String>): String {
-        if (selectors.isEmpty()) return ""
-        val css = selectors.joinToString(",\n") + " { display:none!important; visibility:hidden!important; }"
-        val b64 = android.util.Base64.encodeToString(css.toByteArray(), android.util.Base64.NO_WRAP)
-        return """
-(function(){
-    function injectCss() {
-        if (document.getElementById('__ht_cosmetic__')) return;
-        var s = document.createElement('style');
-        s.id = '__ht_cosmetic__';
-        s.textContent = atob('$b64');
-        (document.head || document.documentElement).appendChild(s);
-    }
-    injectCss();
-    new MutationObserver(injectCss).observe(document.documentElement,
-        { childList:true, subtree:true });
-})();
-""".trimIndent()
-    }
+// END OF PART 5/10
 
-    fun buildPageJs(rules: ParsedRules): String {
-        val sb = StringBuilder()
-        sb.append(DARK_MODE_JS)
-        sb.append("\n")
-        sb.append(ScriptletLibrary.buildInjectionJs(rules.scriptlets))
-        sb.append("\n")
-        sb.append(buildCosmeticJs(rules.cosmetic))
-        return sb.toString()
-    }
 
-    fun shouldBlock(url: String, rules: ParsedRules): Boolean {
-        return rules.network.any { pattern ->
-            url.contains(pattern, ignoreCase = true)
-        }
-    }
-}
+// ═══════════════════════════════════════════════════════════════════
+// === PART 6/10 — Reserved ===
+// ═══════════════════════════════════════════════════════════════════
+
+// END OF PART 6/10
+
+
+// ═══════════════════════════════════════════════════════════════════
+// === PART 7/10 — Reserved ===
+// ═══════════════════════════════════════════════════════════════════
+
+// END OF PART 7/10
+
+
+// ═══════════════════════════════════════════════════════════════════
+// === PART 8/10 — Reserved ===
+// ═══════════════════════════════════════════════════════════════════
 
 // END OF PART 8/10
 
@@ -674,7 +282,6 @@ object AdBlocker {
 
 @Composable
 fun HueTubeBottomSheet(
-    visible: Boolean,
     adBlockEnabled: Boolean,
     onToggleAdBlock: (Boolean) -> Unit,
     updateStatus: String,
@@ -682,8 +289,6 @@ fun HueTubeBottomSheet(
     onUpdate: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    if (!visible) return
-
     // Scrim
     Box(
         modifier = Modifier
@@ -699,10 +304,10 @@ fun HueTubeBottomSheet(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(SHEET_BG)
-                .clickable(enabled = false) {} // consume clicks so scrim doesn't fire
+                .clickable(enabled = false) {}
                 .pointerInput(Unit) {
-                    detectVerticalDragGestures { _, dragAmount ->
-                        if (dragAmount > 40f) onDismiss()
+                    detectVerticalDragGestures { _, drag ->
+                        if (drag > 40f) onDismiss()
                     }
                 }
                 .padding(bottom = 32.dp)
@@ -723,9 +328,9 @@ fun HueTubeBottomSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // ── Ad Blocking Row ──────────────────────────────────
+            // ── Ad Block Toggle ───────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -734,26 +339,39 @@ fun HueTubeBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
-                    Text("Ad Blocking", color = TEXT_PRI, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    Text("Scriptlets + cosmetic filters", color = TEXT_SEC, fontSize = 12.sp)
+                    Text(
+                        "Ad Blocking",
+                        color = TEXT_PRI,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        "Injected on every page load",
+                        color = TEXT_SEC,
+                        fontSize = 12.sp
+                    )
                 }
                 Switch(
                     checked = adBlockEnabled,
                     onCheckedChange = onToggleAdBlock,
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = ACCENT,
+                        checkedThumbColor   = Color.White,
+                        checkedTrackColor   = ACCENT,
                         uncheckedThumbColor = Color(0xFF888888),
                         uncheckedTrackColor = Color(0xFF333333)
                     )
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-            Divider(color = DIVIDER, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 20.dp))
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(Modifier.height(4.dp))
+            HorizontalDivider(
+                color = DIVIDER,
+                thickness = 0.5.dp,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            Spacer(Modifier.height(12.dp))
 
-            // ── Update Rules Row ─────────────────────────────────
+            // ── Update Rules ──────────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -761,12 +379,18 @@ fun HueTubeBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
-                    Text("Filter Rules", color = TEXT_PRI, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                     Text(
-                        if (updateStatus.isEmpty()) "Tap to fetch latest uBlock rules"
-                        else updateStatus,
-                        color = TEXT_SEC, fontSize = 12.sp
+                        "Blocker Script",
+                        color = TEXT_PRI,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        updateStatus.ifEmpty { "No script cached yet" },
+                        color = if (updateStatus.startsWith("Failed")) Color(0xFFCC4444)
+                                else TEXT_SEC,
+                        fontSize = 12.sp
                     )
                 }
                 Button(
@@ -775,16 +399,16 @@ fun HueTubeBottomSheet(
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF222222),
-                        contentColor = TEXT_PRI,
+                        containerColor         = Color(0xFF222222),
+                        contentColor           = TEXT_PRI,
                         disabledContainerColor = Color(0xFF1A1A1A),
-                        disabledContentColor = TEXT_SEC
+                        disabledContentColor   = TEXT_SEC
                     )
                 ) {
                     if (isUpdating) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            color = TEXT_SEC,
+                            modifier    = Modifier.size(14.dp),
+                            color       = TEXT_SEC,
                             strokeWidth = 2.dp
                         )
                     } else {
@@ -793,11 +417,15 @@ fun HueTubeBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Divider(color = DIVIDER, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 20.dp))
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(
+                color = DIVIDER,
+                thickness = 0.5.dp,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
 
-            // ── Future features go below this line ───────────────
-            Spacer(modifier = Modifier.height(24.dp))
+            // ── Future features below ─────────────────────────────
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -811,10 +439,10 @@ fun HueTubeBottomSheet(
 
 @Composable
 fun HueTubeApp() {
-    val context    = LocalContext.current
-    val activity   = context as? android.app.Activity ?: return
-    val scope      = rememberCoroutineScope()
-    val repo       = remember { RulesRepository(context) }
+    val context  = LocalContext.current
+    val activity = context as? android.app.Activity ?: return
+    val scope    = rememberCoroutineScope()
+    val repo     = remember { AdBlockRepo(context) }
 
     val fullscreenManager = remember { FullscreenManager(activity) }
 
@@ -825,13 +453,15 @@ fun HueTubeApp() {
     var adBlockEnabled     by remember { mutableStateOf(true) }
     var isUpdating         by remember { mutableStateOf(false) }
     var updateStatus       by remember { mutableStateOf("") }
-    var rules              by remember { mutableStateOf(ParsedRules()) }
+    var cachedJs           by remember { mutableStateOf<String?>(null) }
 
-    // Load rules from disk on start
+    // Load cached JS + meta on start
     LaunchedEffect(Unit) {
-        rules = withContext(Dispatchers.IO) { repo.load() }
-        if (rules.updatedAt.isNotEmpty()) {
-            updateStatus = "Updated ${rules.updatedAt}"
+        withContext(Dispatchers.IO) {
+            val js   = repo.loadJs()
+            val meta = repo.loadMeta()
+            cachedJs     = js
+            updateStatus = meta
         }
     }
 
@@ -846,6 +476,9 @@ fun HueTubeApp() {
         }
     }
 
+    // Keep a ref to inject updated JS after an update without reload
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
     // ── Single WebView ───────────────────────────────────────────
     val webView = remember {
         WebView(context).apply {
@@ -855,12 +488,12 @@ fun HueTubeApp() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
             with(settings) {
-                javaScriptEnabled            = true
-                domStorageEnabled            = true
-                loadWithOverviewMode         = true
-                useWideViewPort              = true
-                builtInZoomControls          = true
-                displayZoomControls          = false
+                javaScriptEnabled                = true
+                domStorageEnabled                = true
+                loadWithOverviewMode             = true
+                useWideViewPort                  = true
+                builtInZoomControls              = true
+                displayZoomControls              = false
                 setSupportZoom(true)
                 mediaPlaybackRequiresUserGesture = false
             }
@@ -879,37 +512,29 @@ fun HueTubeApp() {
             }
 
             webViewClient = object : WebViewClient() {
-                override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                    if (adBlockEnabled) {
-                        view.evaluateJavascript(AdBlocker.buildPageJs(rules), null)
-                    } else {
-                        // Still inject dark mode even if ad block off
-                        view.evaluateJavascript("""
-                            (function(){
-                                document.documentElement.style.setProperty('color-scheme','dark');
-                                document.cookie='PREF=f6=4;path=/;domain=.youtube.com';
-                            })();
-                        """.trimIndent(), null)
-                    }
-                }
-
-                override fun shouldInterceptRequest(
+                override fun onPageStarted(
                     view: WebView,
-                    request: WebResourceRequest
-                ): WebResourceResponse? {
+                    url: String,
+                    favicon: android.graphics.Bitmap?
+                ) {
+                    // Always inject dark mode
+                    view.evaluateJavascript(DARK_MODE_JS, null)
+
+                    // Inject ad blocker JS if enabled and cached
                     if (adBlockEnabled) {
-                        val url = request.url.toString()
-                        if (AdBlocker.shouldBlock(url, rules)) {
-                            return WebResourceResponse("text/plain", "utf-8", null)
+                        cachedJs?.let { js ->
+                            view.evaluateJavascript(js, null)
                         }
                     }
-                    return super.shouldInterceptRequest(view, request)
                 }
             }
 
             loadUrl(HOMEPAGE_URL)
         }
     }
+
+    // Store ref for post-update injection
+    LaunchedEffect(webView) { webViewRef.value = webView }
 
     // Add WebView to container once
     LaunchedEffect(Unit) { container.addView(webView) }
@@ -925,9 +550,9 @@ fun HueTubeApp() {
         }
         val url = webView.url ?: ""
         when {
-            webView.canGoBack()                                           -> webView.goBack()
-            url.startsWith(HOMEPAGE_URL) || url == "about:blank"         -> activity.finish()
-            else                                                          -> webView.loadUrl(HOMEPAGE_URL)
+            webView.canGoBack()                                   -> webView.goBack()
+            url.startsWith(HOMEPAGE_URL) || url == "about:blank" -> activity.finish()
+            else                                                  -> webView.loadUrl(HOMEPAGE_URL)
         }
     }
 
@@ -938,10 +563,9 @@ fun HueTubeApp() {
             .background(BG)
             .systemBarsPadding()
     ) {
-        // WebView
         AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
 
-        // Floating menu button — bottom-left, only when not fullscreen
+        // Floating menu button — bottom-left, hidden in fullscreen
         if (!isFullscreen) {
             Box(
                 modifier = Modifier
@@ -953,7 +577,6 @@ fun HueTubeApp() {
                     .clickable { showSheet = true },
                 contentAlignment = Alignment.Center
             ) {
-                // Three-line menu icon drawn with boxes
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -971,25 +594,24 @@ fun HueTubeApp() {
             }
         }
 
-        // Bottom Sheet overlay
+        // Bottom sheet
         if (showSheet) {
             HueTubeBottomSheet(
-                visible        = showSheet,
-                adBlockEnabled = adBlockEnabled,
+                adBlockEnabled  = adBlockEnabled,
                 onToggleAdBlock = { adBlockEnabled = it },
-                updateStatus   = updateStatus,
-                isUpdating     = isUpdating,
-                onUpdate       = {
+                updateStatus    = updateStatus,
+                isUpdating      = isUpdating,
+                onUpdate        = {
                     scope.launch {
                         isUpdating   = true
-                        updateStatus = "Updating..."
+                        updateStatus = "Fetching..."
                         val result   = repo.update()
-                        result.onSuccess { updated ->
-                            rules        = updated
-                            updateStatus = "Updated ${updated.updatedAt}"
+                        result.onSuccess { meta ->
+                            cachedJs     = repo.loadJs()
+                            updateStatus = meta
                         }
-                        result.onFailure {
-                            updateStatus = "Failed — check connection"
+                        result.onFailure { e ->
+                            updateStatus = "Failed: ${e.message?.take(40) ?: "unknown error"}"
                         }
                         isUpdating = false
                     }
