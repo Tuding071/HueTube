@@ -220,69 +220,42 @@ private val DARK_MODE_JS = """
 // Last updated: 2025-06
 //
 // What this does:
-//   - Patches window.fetch to intercept YouTube's player API calls
-//     (/youtubei/v1/player) and strips ad-related keys from the
-//     JSON response before YouTube's player reads them
-//   - Injects CSS to hide any residual ad UI elements
+//   - CSS only — hides any residual ad UI elements that slip through
 //   - MutationObserver re-injects CSS on SPA navigation
+//   - Actual ad video blocking is done at network level in Part 10
+//     via shouldInterceptRequest (more reliable than fetch patching)
 //
 // ═══════════════════════════════════════════════════════════════════
 
 private val AD_BLOCK_JS = """
 (function(){
     'use strict';
-
-    // ── 1. Patch fetch — strip ad keys from player API response ──
-    var _fetch = window.fetch;
-    window.fetch = function(input, init) {
-        return _fetch.apply(this, arguments).then(function(resp) {
-            var url = typeof input === 'string' ? input : (input && input.url) || '';
-            if (!url.includes('/youtubei/')) return resp;
-            return resp.clone().text().then(function(text) {
-                try {
-                    var obj = JSON.parse(text);
-                    delete obj.adPlacements;
-                    delete obj.playerAds;
-                    delete obj.adSlots;
-                    delete obj.auxiliaryUi;
-                    if (obj.playerConfig && obj.playerConfig.adConfig) {
-                        delete obj.playerConfig.adConfig;
-                    }
-                    return new Response(JSON.stringify(obj), {
-                        status: resp.status,
-                        statusText: resp.statusText,
-                        headers: resp.headers
-                    });
-                } catch(e) {
-                    return resp;
-                }
-            });
-        });
-    };
-
-    // ── 2. CSS — hide leftover ad UI elements ────────────────────
     var CSS = [
         '#player-ads',
         '.ad-showing',
         '.ad-interrupting',
+        '.ad-created',
         'ytd-promoted-sparkles-web-renderer',
         'ytd-action-companion-ad-renderer',
         'ytd-display-ad-renderer',
         'ytd-video-masthead-ad-v3-renderer',
         'ytd-overlay-interstitial-promo-renderer',
         'ytd-banner-promo-renderer',
+        'ytd-statement-banner-renderer',
         '.ytp-ad-overlay-container',
         '.ytp-ad-text-overlay',
         '.ytp-ad-skip-button-container',
         '.ytp-ad-skip-button-modern',
-        '.ytp-ad-module'
-    ].join(',');
+        '.ytp-ad-module',
+        '.ytp-ad-progress',
+        '.ytp-ad-progress-list'
+    ].join(',') + '{display:none!important;visibility:hidden!important;}';
 
     function injectCss() {
         if (document.getElementById('__ht_adcss__')) return;
         var s = document.createElement('style');
         s.id = '__ht_adcss__';
-        s.textContent = CSS + '{display:none!important;visibility:hidden!important;}';
+        s.textContent = CSS;
         (document.head || document.documentElement).appendChild(s);
     }
 
@@ -291,7 +264,6 @@ private val AD_BLOCK_JS = """
         document.documentElement,
         { childList: true, subtree: true }
     );
-
 })();
 """.trimIndent()
 
@@ -420,6 +392,7 @@ fun HueTubeBottomSheet(
 // END OF PART 9/10
 
 
+
 // ═══════════════════════════════════════════════════════════════════
 // === PART 10/10 — Main App Composable ===
 // ═══════════════════════════════════════════════════════════════════
@@ -489,6 +462,40 @@ fun HueTubeApp() {
                     if (adBlockEnabled) {
                         view.evaluateJavascript(AD_BLOCK_JS, null)
                     }
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    if (!adBlockEnabled) return null
+                    val url = request.url.toString()
+
+                    val blockPatterns = listOf(
+                        "doubleclick.net",
+                        "googleadservices.com",
+                        "googlesyndication.com",
+                        "/api/stats/ads",
+                        "/api/stats/atr",
+                        "youtube.com/pagead",
+                        "youtube.com/ptracking",
+                        "/get_midroll_info",
+                        "yt3.ggpht.com/ytad",
+                        "&oad=",
+                        "ctier=L",
+                        "/ad_break",
+                        "adformat=",
+                        "/log_event?alt=json&key",
+                        "static.doubleclick",
+                        "ad.youtube.com"
+                    )
+
+                    if (blockPatterns.any { url.contains(it, ignoreCase = true) }) {
+                        return WebResourceResponse("text/plain", "utf-8",
+                            "".byteInputStream())
+                    }
+
+                    return null
                 }
             }
 
@@ -565,3 +572,4 @@ fun HueTubeApp() {
 }
 
 // END OF PART 10/10
+
