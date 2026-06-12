@@ -220,121 +220,123 @@ private val DARK_MODE_JS = """
 //   3. Replace this entire PART 5 with what the AI provides
 //   4. Push to GitHub and rebuild via Actions
 //
-// Strategy:
-//   - Speed ad videos to 10x → 30s ad finishes in ~3s
-//   - Mute ads during speed-up
-//   - Auto-click "Skip Ad" button the instant it appears
-//   - Hide ad UI elements via CSS
-//   - MutationObserver keeps everything alive through SPA navigation
-//
 // Last updated: 2025-06
+//
+// Strategy:
+//   - Detect ads via multiple signals (class, skip button, overlay)
+//   - Speed video to 16x (browser max) + mute
+//   - Auto-click skip button the instant it appears
+//   - Hide ad UI overlays via CSS
+//   - MutationObserver is primary driver — faster than setInterval
+//   - setInterval as fallback for cases observer misses
 //
 // ═══════════════════════════════════════════════════════════════════
 
 private val AD_BLOCK_JS = """
 (function(){
     'use strict';
-    
-    // ── CSS selectors for ad UI elements to hide ──────────────────
-    var HIDE_SELECTORS = [
-        '#player-ads',
-        '.ad-showing',
-        '.ad-interrupting',
-        '.ad-created',
-        'ytd-promoted-sparkles-web-renderer',
-        'ytd-action-companion-ad-renderer',
-        'ytd-display-ad-renderer',
-        'ytd-video-masthead-ad-v3-renderer',
-        'ytd-overlay-interstitial-promo-renderer',
-        'ytd-banner-promo-renderer',
-        'ytd-statement-banner-renderer',
-        '.ytp-ad-overlay-container',
-        '.ytp-ad-text-overlay',
-        '.ytp-ad-module',
-        '.ytp-ad-progress',
-        '.ytp-ad-progress-list',
-        '.ytp-ad-image-overlay',
-        '.ytp-ad-player-overlay',
-        '.ytp-ad-skip-button-container',
-        '.ytp-ad-skip-button-modern'
-    ].join(',') + '{display:none!important;visibility:hidden!important;}';
-    
-    // ── Inject CSS to hide ad UI ──────────────────────────────────
+
+    // ── CSS — hide ad overlays only, never the video element ─────
+    var CSS =
+        '.ytp-ad-overlay-container,' +
+        '.ytp-ad-text-overlay,' +
+        '.ytp-ad-image-overlay,' +
+        '.ytp-ad-progress,' +
+        '.ytp-ad-progress-list,' +
+        'ytd-promoted-sparkles-web-renderer,' +
+        'ytd-action-companion-ad-renderer,' +
+        'ytd-display-ad-renderer,' +
+        'ytd-banner-promo-renderer,' +
+        'ytd-statement-banner-renderer,' +
+        'ytd-video-masthead-ad-v3-renderer,' +
+        'ytd-overlay-interstitial-promo-renderer' +
+        '{display:none!important;visibility:hidden!important;}';
+
     function injectCss() {
-        if (document.getElementById('__ht_adcss__')) return;
+        if (document.getElementById('__ht_css__')) return;
         var s = document.createElement('style');
-        s.id = '__ht_adcss__';
-        s.textContent = HIDE_SELECTORS;
+        s.id = '__ht_css__';
+        s.textContent = CSS;
         (document.head || document.documentElement).appendChild(s);
     }
-    
-    // ── Speed up ad video to 10x and mute ─────────────────────────
-    var lastAdState = false;
-    
-    function handleAdVideo() {
-        var video = document.querySelector('video.video-stream.html5-main-video');
-        if (!video) return;
-        
-        var isAdShowing = !!(
-            document.querySelector('.ad-showing') ||
-            document.querySelector('.ad-interrupting') ||
-            document.querySelector('.ytp-ad-player-overlay') ||
-            (video.duration < 60 && document.querySelector('#player-ads'))
-        );
-        
-        if (isAdShowing) {
-            // Speed up and mute ad
-            if (video.playbackRate !== 10) {
-                video.playbackRate = 10;
-            }
-            video.muted = true;
-            
-            // Try to click skip button
-            clickSkipButton();
-            
-            if (!lastAdState) {
-                console.log('HueTube: Ad detected, speeding to 10x + muted');
-            }
-        } else if (lastAdState && !isAdShowing) {
-            // Ad finished, restore normal speed
-            if (video.playbackRate > 2) {
-                video.playbackRate = 1;
-                video.muted = false;
-            }
-            console.log('HueTube: Ad finished, restored normal speed');
-        }
-        
-        lastAdState = isAdShowing;
+
+    // ── Detect if an ad is currently playing ─────────────────────
+    function isAdPlaying() {
+        // Signal 1: skip button exists and visible
+        var skip = getSkipBtn();
+        if (skip) return true;
+        // Signal 2: ad overlay present
+        if (document.querySelector('.ytp-ad-player-overlay-instream-info')) return true;
+        // Signal 3: ad countdown present
+        if (document.querySelector('.ytp-ad-simple-ad-badge')) return true;
+        // Signal 4: classic ad-showing class
+        if (document.querySelector('.ad-showing')) return true;
+        return false;
     }
-    
-    // ── Auto-click skip button ────────────────────────────────────
-    function clickSkipButton() {
-        var skipBtn = document.querySelector('.ytp-ad-skip-button') ||
-                      document.querySelector('.ytp-skip-ad-button') ||
-                      document.querySelector('[class*="ytp-ad-skip"]') ||
-                      document.querySelector('button[aria-label*="Skip"]');
-        
-        if (skipBtn && skipBtn.offsetParent !== null) {
-            skipBtn.click();
-            console.log('HueTube: Skip button clicked');
-        }
+
+    // ── Find skip button across all known class names ─────────────
+    function getSkipBtn() {
+        return document.querySelector('.ytp-ad-skip-button') ||
+               document.querySelector('.ytp-skip-ad-button') ||
+               document.querySelector('.ytp-ad-skip-button-modern') ||
+               document.querySelector('button.ytp-ad-skip-button-modern') ||
+               document.querySelector('[class*="skip-button"]');
     }
-    
-    // ── Init ──────────────────────────────────────────────────────
-    injectCss();
-    
-    // Check ad state frequently (every 250ms for fast skip detection)
-    setInterval(handleAdVideo, 250);
-    
-    // Re-inject CSS on SPA navigation
-    new MutationObserver(function() {
+
+    // ── Core: speed up + mute + skip ─────────────────────────────
+    function handleAd() {
         injectCss();
-    }).observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
-    
-    console.log('HueTube: Ad blocker initialized (10x speed + auto-skip)');
+
+        var skip = getSkipBtn();
+        if (skip && skip.offsetParent !== null) {
+            skip.click();
+            return;
+        }
+
+        if (!isAdPlaying()) return;
+
+        // Find the active video element
+        var videos = document.querySelectorAll('video');
+        for (var i = 0; i < videos.length; i++) {
+            var v = videos[i];
+            if (v.readyState === 0) continue;
+            if (v.playbackRate < 16) v.playbackRate = 16;
+            if (!v.muted) v.muted = true;
+        }
+    }
+
+    // ── Run on DOM mutations (primary trigger) ────────────────────
+    new MutationObserver(function() {
+        handleAd();
+        injectCss();
+    }).observe(document.documentElement, { childList: true, subtree: true });
+
+    // ── Also hook video playbackRate resets ───────────────────────
+    // YouTube resets playbackRate when ad segment changes.
+    // We intercept the setter to force it back to 16 during ads.
+    var origDescriptor = Object.getOwnPropertyDescriptor(
+        HTMLMediaElement.prototype, 'playbackRate'
+    );
+    if (origDescriptor) {
+        Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', {
+            get: function() {
+                return origDescriptor.get.call(this);
+            },
+            set: function(val) {
+                if (isAdPlaying() && val < 16) {
+                    origDescriptor.set.call(this, 16);
+                } else {
+                    origDescriptor.set.call(this, val);
+                }
+            },
+            configurable: true
+        });
+    }
+
+    // ── Fallback interval ─────────────────────────────────────────
+    setInterval(handleAd, 300);
+
+    injectCss();
 })();
 """.trimIndent()
 
