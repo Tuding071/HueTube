@@ -205,10 +205,8 @@ private val DARK_MODE_JS = """
 
 // END OF PART 4/10
 
-
-
 // ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Ad Block JS (16x + Seek-to-End + Auto-Skip) ===
+// === PART 5/10 — Ad Block JS (Seek-to-End + Mute + CSS) ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // !! THIS IS THE ONLY PART THAT NEEDS UPDATING WHEN ADS BREAK !!
@@ -224,13 +222,12 @@ private val DARK_MODE_JS = """
 // Last updated: 2025-06
 //
 // Strategy:
-//   1. Skip button visible → click it immediately (no visibility check)
-//   2. Ad playing + duration known → seek to duration - 0.1 (jump to end)
-//   3. Ad playing + duration unknown → seek +2s every 100ms
-//   4. Always 16x + mute as baseline
+//   1. Detect ad via multiple signals
+//   2. Mute video during ad
+//   3. Seek to duration - 0.1 to jump to end of ad
+//   4. Restore mute when ad ends
 //   5. CSS hides ad overlays/banners
-//   6. playbackRate setter intercepted so YouTube can't reset it
-//   7. MutationObserver primary driver + setInterval fallback
+//   6. MutationObserver primary + setInterval fallback
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -246,6 +243,8 @@ private val AD_BLOCK_JS = """
         '.ytp-ad-progress,' +
         '.ytp-ad-progress-list,' +
         '.ytp-ad-simple-ad-badge,' +
+        '.ytp-ad-skip-button-container,' +
+        '.ytp-ad-skip-button-modern,' +
         'ytd-promoted-sparkles-web-renderer,' +
         'ytd-action-companion-ad-renderer,' +
         'ytd-display-ad-renderer,' +
@@ -265,26 +264,15 @@ private val AD_BLOCK_JS = """
 
     // ── Detect ad playing ─────────────────────────────────────────
     function isAdPlaying() {
-        if (getSkipBtn()) return true;
         if (document.querySelector('.ytp-ad-player-overlay-instream-info')) return true;
         if (document.querySelector('.ytp-ad-simple-ad-badge')) return true;
-        if (document.querySelector('.ad-showing')) return true;
         if (document.querySelector('.ytp-ad-duration-remaining')) return true;
+        if (document.querySelector('.ad-showing')) return true;
         return false;
     }
 
-    // ── Find skip button — no visibility check (mobile fix) ──────
-    function getSkipBtn() {
-        return document.querySelector('.ytp-ad-skip-button') ||
-               document.querySelector('.ytp-skip-ad-button') ||
-               document.querySelector('.ytp-ad-skip-button-modern') ||
-               document.querySelector('button.ytp-ad-skip-button-modern') ||
-               document.querySelector('[class*="skip-button"]') ||
-               document.querySelector('[class*="skip-ad"]');
-    }
-
     // ── Get active video element ──────────────────────────────────
-    function getAdVideo() {
+    function getVideo() {
         var videos = document.querySelectorAll('video');
         for (var i = 0; i < videos.length; i++) {
             if (videos[i].readyState > 0) return videos[i];
@@ -292,111 +280,40 @@ private val AD_BLOCK_JS = """
         return null;
     }
 
-    // ── Fallback seek interval handle ─────────────────────────────
-    var seekInterval = null;
-
-    function stopSeekInterval() {
-        if (seekInterval !== null) {
-            clearInterval(seekInterval);
-            seekInterval = null;
-        }
-    }
-
-    function startSeekInterval(video) {
-        if (seekInterval !== null) return; // already running
-        seekInterval = setInterval(function() {
-            if (!isAdPlaying()) {
-                stopSeekInterval();
-                return;
-            }
-            var v = getAdVideo();
-            if (!v) return;
-            // Re-attempt duration jump each tick in case it loaded
-            if (v.duration && isFinite(v.duration) && v.duration > 0) {
-                v.currentTime = v.duration - 0.1;
-                stopSeekInterval();
-            } else {
-                // Duration still unknown — nudge forward
-                v.currentTime = v.currentTime + 2;
-            }
-        }, 100);
-    }
+    // ── Track ad state for mute restore ──────────────────────────
+    var wasAd = false;
 
     // ── Core handler ──────────────────────────────────────────────
     function handleAd() {
         injectCss();
-
-        // Step 1: click skip if present — no visibility check
-        var skip = getSkipBtn();
-        if (skip) {
-            skip.click();
-            stopSeekInterval();
-            return;
-        }
-
-        // Step 2: if no skip button and no ad, stop seek and bail
-        if (!isAdPlaying()) {
-            stopSeekInterval();
-            return;
-        }
-
-        // Step 3: ad is playing — speed + mute
-        var v = getAdVideo();
-        if (v) {
-            if (v.playbackRate < 16) v.playbackRate = 16;
-            if (!v.muted) v.muted = true;
-
-            // Step 4: seek to end if duration known
-            if (v.duration && isFinite(v.duration) && v.duration > 0) {
-                v.currentTime = v.duration - 0.1;
-                stopSeekInterval();
-            } else {
-                // Step 5: duration unknown — start nudge interval
-                startSeekInterval(v);
-            }
-        }
-    }
-
-    // ── Intercept playbackRate setter ─────────────────────────────
-    // Prevents YouTube resetting rate on segment change
-    var orig = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
-    if (orig) {
-        Object.defineProperty(HTMLMediaElement.prototype, 'playbackRate', {
-            get: function() { return orig.get.call(this); },
-            set: function(val) {
-                orig.set.call(this, (isAdPlaying() && val < 16) ? 16 : val);
-            },
-            configurable: true
-        });
-    }
-
-    // ── Restore normal playback after ad ends ─────────────────────
-    // Watches for ad state clearing and resets mute + speed
-    var wasAd = false;
-    function checkAdEnd() {
         var nowAd = isAdPlaying();
-        if (wasAd && !nowAd) {
-            var v = getAdVideo();
+
+        if (nowAd) {
+            var v = getVideo();
             if (v) {
-                v.playbackRate = 1;
-                v.muted = false;
+                // Mute ad
+                if (!v.muted) v.muted = true;
+                // Seek to end if duration known
+                if (v.duration && isFinite(v.duration) && v.duration > 0) {
+                    v.currentTime = v.duration - 0.1;
+                }
             }
-            stopSeekInterval();
+        } else if (wasAd && !nowAd) {
+            // Ad just ended — restore mute
+            var v2 = getVideo();
+            if (v2) v2.muted = false;
         }
+
         wasAd = nowAd;
     }
 
     // ── MutationObserver — primary driver ─────────────────────────
     new MutationObserver(function() {
         handleAd();
-        checkAdEnd();
     }).observe(document.documentElement, { childList: true, subtree: true });
 
     // ── setInterval fallback ──────────────────────────────────────
-    setInterval(function() {
-        handleAd();
-        checkAdEnd();
-    }, 300);
+    setInterval(handleAd, 300);
 
     injectCss();
 })();
@@ -681,3 +598,5 @@ fun HueTubeApp() {
 }
 
 // END OF PART 10/10
+
+
