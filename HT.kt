@@ -47,7 +47,8 @@
 
 package com.huetube.app
 
-import android.content.pm.ActivityInfoimport android.os.Bundle
+import android.content.pm.ActivityInfo
+import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -98,6 +99,7 @@ private const val HOMEPAGE_URL = "https://m.youtube.com"
 
 // END OF PART 2/10
 
+
 // ═══════════════════════════════════════════════════════════════════
 // === PART 3/10 — Fullscreen Manager ===
 // ═══════════════════════════════════════════════════════════════════
@@ -146,6 +148,7 @@ class FullscreenManager(val activity: android.app.Activity) {
     fun exitFullscreen(callback: WebChromeClient.CustomViewCallback?) {
         if (!isActive) return
         isActive = false
+
         val decorView = activity.window.decorView as android.widget.FrameLayout
         customView?.let { decorView.removeView(it) }
         customView = null
@@ -194,7 +197,8 @@ private val DARK_MODE_JS = """
                 dispatchEvent: function(){ return true; }
             };
         }
-        return r;    };
+        return r;
+    };
     document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
 })();
 """.trimIndent()
@@ -243,7 +247,8 @@ private val AD_BLOCK_JS = """
         '.ytp-ad-text-overlay,' +
         '.ytp-ad-image-overlay,' +
         '.ytp-ad-progress,' +
-        '.ytp-ad-progress-list,' +        '.ytp-ad-simple-ad-badge,' +
+        '.ytp-ad-progress-list,' +
+        '.ytp-ad-simple-ad-badge,' +
         '.ytp-ad-skip-button-container,' +
         '.ytp-ad-skip-button-modern,' +
         'ytd-promoted-sparkles-web-renderer,' +
@@ -292,7 +297,8 @@ private val AD_BLOCK_JS = """
                 if (!v.muted) v.muted = true;
                 if (v.duration && isFinite(v.duration) && v.duration > 0) {
                     v.currentTime = v.duration - 0.1;
-                }            }
+                }
+            }
         } else if (window.__ht_wasAd__ && !nowAd) {
             // Ad just ended — restore mute
             var v2 = getVideo();
@@ -315,8 +321,6 @@ private val AD_BLOCK_JS = """
 """.trimIndent()
 
 // END OF PART 5/10
-
-
 
 // ═══════════════════════════════════════════════════════════════════
 // === PART 6/10 — Reserved ===
@@ -342,6 +346,7 @@ private val AD_BLOCK_JS = """
 // ═══════════════════════════════════════════════════════════════════
 // === PART 9/10 — Bottom Sheet UI ===
 // ═══════════════════════════════════════════════════════════════════
+
 @Composable
 fun HueTubeBottomSheet(
     adBlockEnabled: Boolean,
@@ -390,7 +395,8 @@ fun HueTubeBottomSheet(
             Spacer(Modifier.height(16.dp))
 
             // ── Skip Ads Toggle ───────────────────────────────────
-            Row(                modifier = Modifier
+            Row(
+                modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -438,8 +444,10 @@ fun HueTubeBottomSheet(
 // END OF PART 9/10
 
 
+
 // ═══════════════════════════════════════════════════════════════════
-// === PART 10/10 — Main App Composable ===// ═══════════════════════════════════════════════════════════════════
+// === PART 10/10 — Main App Composable ===
+// ═══════════════════════════════════════════════════════════════════
 
 @Composable
 fun HueTubeApp() {
@@ -488,7 +496,8 @@ fun HueTubeApp() {
                     fullscreenCallback = callback
                     isFullscreen = true
                     fullscreenManager.enterFullscreen(view, callback, container, this@apply)
-                }                override fun onHideCustomView() {
+                }
+                override fun onHideCustomView() {
                     fullscreenManager.exitFullscreen(fullscreenCallback)
                     fullscreenCallback = null
                     isFullscreen = false
@@ -537,7 +546,8 @@ fun HueTubeApp() {
             .fillMaxSize()
             .background(BG)
             .systemBarsPadding()
-    ) {        AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
+    ) {
+        AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
 
         // Floating menu button — bottom-left, hidden in fullscreen
         if (!isFullscreen) {
@@ -580,3 +590,5 @@ fun HueTubeApp() {
 }
 
 // END OF PART 10/10
+
+
