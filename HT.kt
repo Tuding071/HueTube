@@ -1,29 +1,25 @@
 // ═══════════════════════════════════════════════════════════════════
-// HueTube - V1.7 (Cosmetic Ad Blocker + 10x Speed + Auto-Skip)
+// HueTube - V1.8 (Seek-to-End Ad Skip)
 // ═══════════════════════════════════════════════════════════════════
 // === PART 0/10 — Theme + Maintenance Guide ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // THEME: Dark YouTube — Near-Black Background (#0A0A0A)
 //
-// ── AD BLOCKER STRATEGY ──────────────────────────────────────────
-// Since truly blocking YouTube ads at the network/script level is a
-// constant cat-and-mouse game, this version uses a practical approach:
-//
-//   1. Speed ad videos to 10x → 30s ad finishes in ~3 seconds
-//   2. Mute ads during speed-up → no annoying 10x chipmunk audio
-//   3. Auto-click "Skip Ad" button → instant skip when it appears
-//   4. Hide ad UI elements via CSS → page looks clean
-//   5. MutationObserver → survives YouTube's SPA navigation
+// ── AD SKIP STRATEGY ─────────────────────────────────────────────
+//   Detects ads via DOM signals, mutes + seeks to end of ad video.
+//   Re-arms on every page navigation by resetting the init flag
+//   from Kotlin side on onPageStarted AND onPageFinished.
+//   Double injection improves timing odds against YouTube's player.
 //
 // ── MAINTENANCE ──────────────────────────────────────────────────
 // When ads break, go to PART 5 and update AD_BLOCK_JS.
-// That's the only thing that ever needs changing for ad blocking.
 //
 // To update it:
 //   1. Open this file with any AI (Claude, ChatGPT, etc.)
 //   2. Say: "YouTube ads are showing again, update AD_BLOCK_JS
-//            in PART 5 with the latest working ad block script"
+//            in PART 5 with the latest working ad skip script
+//            for WebView injection"
 //   3. Replace PART 5 with what the AI gives you
 //   4. Rebuild via GitHub Actions
 //
@@ -175,7 +171,7 @@ class FullscreenManager(val activity: android.app.Activity) {
 // === PART 4/10 — Dark Mode JS ===
 // ═══════════════════════════════════════════════════════════════════
 //
-// Always injected regardless of ad block toggle.
+// Always injected regardless of skip ads toggle.
 // Forces YouTube dark mode and sets the dark preference cookie.
 //
 // ═══════════════════════════════════════════════════════════════════
@@ -203,11 +199,18 @@ private val DARK_MODE_JS = """
 })();
 """.trimIndent()
 
+// Resets the init guard — injected before AD_BLOCK_JS on every
+// onPageStarted and onPageFinished so the script re-arms each
+// navigation including YouTube SPA route changes.
+private val RESET_JS = """
+(function(){ window.__ht_init__ = false; window.__ht_wasAd__ = false; })();
+""".trimIndent()
+
 // END OF PART 4/10
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Ad Block JS (Seek-to-End + Auto-Skip + CSS) ===
+// === PART 5/10 — Ad Skip JS (Seek-to-End + Mute + CSS) ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // !! THIS IS THE ONLY PART THAT NEEDS UPDATING WHEN ADS BREAK !!
@@ -215,7 +218,7 @@ private val DARK_MODE_JS = """
 // To update:
 //   1. Open this file with any AI assistant
 //   2. Say: "YouTube ads are showing again, update AD_BLOCK_JS
-//            in PART 5 with the latest working ad block script
+//            in PART 5 with the latest working ad skip script
 //            for WebView injection"
 //   3. Replace this entire PART 5 with what the AI provides
 //   4. Push to GitHub and rebuild via Actions
@@ -223,13 +226,15 @@ private val DARK_MODE_JS = """
 // Last updated: 2025-06
 //
 // Strategy:
-//   1. Guard — only init once per page via window.__ht_init__
-//   2. Skip button present → click it immediately
-//   3. Ad playing + duration known → seek to duration - 0.1
-//   4. Duration unknown → nudge +2s every 100ms
-//   5. Mute during ad, restore after
-//   6. CSS hides ad overlays/banners
-//   7. MutationObserver primary + setInterval fallback
+//   1. Guard via window.__ht_init__ — reset from Kotlin on every
+//      navigation so it re-arms without stacking observers
+//   2. Skip button present → click it
+//   3. Ad detected → mute video
+//   4. Duration known → seek to duration - 0.1
+//   5. Duration unknown → nudge +2s every 100ms until known
+//   6. Ad ends → restore mute
+//   7. CSS hides ad overlay UI elements
+//   8. MutationObserver primary + setInterval fallback
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -237,7 +242,7 @@ private val AD_BLOCK_JS = """
 (function(){
     'use strict';
 
-    // ── Guard — only run once per page ────────────────────────────
+    // ── Guard — only one instance per navigation ──────────────────
     if (window.__ht_init__) return;
     window.__ht_init__ = true;
     window.__ht_wasAd__ = false;
@@ -250,6 +255,8 @@ private val AD_BLOCK_JS = """
         '.ytp-ad-progress,' +
         '.ytp-ad-progress-list,' +
         '.ytp-ad-simple-ad-badge,' +
+        '.ytp-ad-skip-button-container,' +
+        '.ytp-ad-skip-button-modern,' +
         'ytd-promoted-sparkles-web-renderer,' +
         'ytd-action-companion-ad-renderer,' +
         'ytd-display-ad-renderer,' +
@@ -269,11 +276,12 @@ private val AD_BLOCK_JS = """
 
     // ── Detect ad playing ─────────────────────────────────────────
     function isAdPlaying() {
-        if (getSkipBtn()) return true;
         if (document.querySelector('.ytp-ad-player-overlay-instream-info')) return true;
         if (document.querySelector('.ytp-ad-simple-ad-badge')) return true;
-        if (document.querySelector('.ad-showing')) return true;
         if (document.querySelector('.ytp-ad-duration-remaining')) return true;
+        if (document.querySelector('.ad-showing')) return true;
+        if (document.querySelector('.ytp-ad-skip-button')) return true;
+        if (document.querySelector('.ytp-skip-ad-button')) return true;
         return false;
     }
 
@@ -306,7 +314,7 @@ private val AD_BLOCK_JS = """
         }
     }
 
-    function startSeekInterval(video) {
+    function startSeekInterval() {
         if (seekInterval !== null) return;
         seekInterval = setInterval(function() {
             if (!isAdPlaying()) { stopSeekInterval(); return; }
@@ -325,7 +333,7 @@ private val AD_BLOCK_JS = """
     function handleAd() {
         injectCss();
 
-        // Click skip if present
+        // Click skip if available
         var skip = getSkipBtn();
         if (skip) {
             skip.click();
@@ -338,17 +346,14 @@ private val AD_BLOCK_JS = """
             return;
         }
 
-        // Mute ad
         var v = getVideo();
         if (v) {
             if (!v.muted) v.muted = true;
-
-            // Seek to end if duration known
             if (v.duration && isFinite(v.duration) && v.duration > 0) {
                 v.currentTime = v.duration - 0.1;
                 stopSeekInterval();
             } else {
-                startSeekInterval(v);
+                startSeekInterval();
             }
         }
     }
@@ -382,6 +387,7 @@ private val AD_BLOCK_JS = """
 
 // END OF PART 5/10
 
+
 // ═══════════════════════════════════════════════════════════════════
 // === PART 6/10 — Reserved ===
 // ═══════════════════════════════════════════════════════════════════
@@ -409,8 +415,8 @@ private val AD_BLOCK_JS = """
 
 @Composable
 fun HueTubeBottomSheet(
-    adBlockEnabled: Boolean,
-    onToggleAdBlock: (Boolean) -> Unit,
+    adSkipEnabled: Boolean,
+    onToggleAdSkip: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     // Scrim
@@ -454,7 +460,7 @@ fun HueTubeBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            // ── Ad Block Toggle ───────────────────────────────────
+            // ── Skip Ads Toggle ───────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -464,21 +470,21 @@ fun HueTubeBottomSheet(
             ) {
                 Column {
                     Text(
-                        "Ad Blocking",
+                        "Skip Ads",
                         color = TEXT_PRI,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        if (adBlockEnabled) "10x speed + auto-skip active"
+                        if (adSkipEnabled) "Active — ads are skipped automatically"
                         else "Disabled — ads play normally",
                         color = TEXT_SEC,
                         fontSize = 12.sp
                     )
                 }
                 Switch(
-                    checked = adBlockEnabled,
-                    onCheckedChange = onToggleAdBlock,
+                    checked = adSkipEnabled,
+                    onCheckedChange = onToggleAdSkip,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor   = Color.White,
                         checkedTrackColor   = ACCENT,
@@ -495,15 +501,7 @@ fun HueTubeBottomSheet(
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
 
-            // ── Info text ─────────────────────────────────────────
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Ads are sped up 10x and muted.\nSkip button is auto-clicked when it appears.",
-                color = TEXT_SEC,
-                fontSize = 11.sp,
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-
+            // ── Future features below this line ───────────────────
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -526,7 +524,7 @@ fun HueTubeApp() {
     var isFullscreen       by remember { mutableStateOf(false) }
     var fullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var showSheet          by remember { mutableStateOf(false) }
-    var adBlockEnabled     by remember { mutableStateOf(true) }
+    var adSkipEnabled      by remember { mutableStateOf(true) }
 
     // ── Permanent container ──────────────────────────────────────
     val container = remember {
@@ -577,8 +575,19 @@ fun HueTubeApp() {
                     url: String,
                     favicon: android.graphics.Bitmap?
                 ) {
+                    // Reset guard so script re-arms on every navigation
+                    view.evaluateJavascript(RESET_JS, null)
                     view.evaluateJavascript(DARK_MODE_JS, null)
-                    if (adBlockEnabled) {
+                    if (adSkipEnabled) {
+                        view.evaluateJavascript(AD_BLOCK_JS, null)
+                    }
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    // Double injection — catches cases where
+                    // onPageStarted fired too early for the player
+                    if (adSkipEnabled) {
+                        view.evaluateJavascript(RESET_JS, null)
                         view.evaluateJavascript(AD_BLOCK_JS, null)
                     }
                 }
@@ -648,9 +657,9 @@ fun HueTubeApp() {
         // Bottom sheet
         if (showSheet) {
             HueTubeBottomSheet(
-                adBlockEnabled  = adBlockEnabled,
-                onToggleAdBlock = { adBlockEnabled = it },
-                onDismiss       = { showSheet = false }
+                adSkipEnabled  = adSkipEnabled,
+                onToggleAdSkip = { adSkipEnabled = it },
+                onDismiss      = { showSheet = false }
             )
         }
     }
