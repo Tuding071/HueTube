@@ -47,8 +47,7 @@
 
 package com.huetube.app
 
-import android.content.pm.ActivityInfo
-import android.os.Bundle
+import android.content.pm.ActivityInfoimport android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -99,7 +98,6 @@ private const val HOMEPAGE_URL = "https://m.youtube.com"
 
 // END OF PART 2/10
 
-
 // ═══════════════════════════════════════════════════════════════════
 // === PART 3/10 — Fullscreen Manager ===
 // ═══════════════════════════════════════════════════════════════════
@@ -148,7 +146,6 @@ class FullscreenManager(val activity: android.app.Activity) {
     fun exitFullscreen(callback: WebChromeClient.CustomViewCallback?) {
         if (!isActive) return
         isActive = false
-
         val decorView = activity.window.decorView as android.widget.FrameLayout
         customView?.let { decorView.removeView(it) }
         customView = null
@@ -197,8 +194,7 @@ private val DARK_MODE_JS = """
                 dispatchEvent: function(){ return true; }
             };
         }
-        return r;
-    };
+        return r;    };
     document.cookie = 'PREF=f6=4;path=/;domain=.youtube.com';
 })();
 """.trimIndent()
@@ -222,12 +218,13 @@ private val DARK_MODE_JS = """
 // Last updated: 2025-06
 //
 // Strategy:
-//   1. Detect ad via multiple signals
-//   2. Mute video during ad
-//   3. Seek to duration - 0.1 to jump to end of ad
-//   4. Restore mute when ad ends
-//   5. CSS hides ad overlays/banners
-//   6. MutationObserver primary + setInterval fallback
+//   1. Guard — only init once per page via window.__ht_init__
+//   2. Detect ad via multiple signals
+//   3. Mute video during ad
+//   4. Seek to duration - 0.1 to jump to end of ad
+//   5. Restore mute when ad ends via window.__ht_wasAd__ flag
+//   6. CSS hides ad overlays/banners
+//   7. MutationObserver primary + setInterval fallback
 //
 // ═══════════════════════════════════════════════════════════════════
 
@@ -235,14 +232,18 @@ private val AD_BLOCK_JS = """
 (function(){
     'use strict';
 
+    // ── Guard — only run once per page ────────────────────────────
+    if (window.__ht_init__) return;
+    window.__ht_init__ = true;
+    window.__ht_wasAd__ = false;
+
     // ── CSS — hide ad overlays, never the video element ──────────
     var CSS =
         '.ytp-ad-overlay-container,' +
         '.ytp-ad-text-overlay,' +
         '.ytp-ad-image-overlay,' +
         '.ytp-ad-progress,' +
-        '.ytp-ad-progress-list,' +
-        '.ytp-ad-simple-ad-badge,' +
+        '.ytp-ad-progress-list,' +        '.ytp-ad-simple-ad-badge,' +
         '.ytp-ad-skip-button-container,' +
         '.ytp-ad-skip-button-modern,' +
         'ytd-promoted-sparkles-web-renderer,' +
@@ -280,9 +281,6 @@ private val AD_BLOCK_JS = """
         return null;
     }
 
-    // ── Track ad state for mute restore ──────────────────────────
-    var wasAd = false;
-
     // ── Core handler ──────────────────────────────────────────────
     function handleAd() {
         injectCss();
@@ -291,20 +289,17 @@ private val AD_BLOCK_JS = """
         if (nowAd) {
             var v = getVideo();
             if (v) {
-                // Mute ad
                 if (!v.muted) v.muted = true;
-                // Seek to end if duration known
                 if (v.duration && isFinite(v.duration) && v.duration > 0) {
                     v.currentTime = v.duration - 0.1;
-                }
-            }
-        } else if (wasAd && !nowAd) {
+                }            }
+        } else if (window.__ht_wasAd__ && !nowAd) {
             // Ad just ended — restore mute
             var v2 = getVideo();
             if (v2) v2.muted = false;
         }
 
-        wasAd = nowAd;
+        window.__ht_wasAd__ = nowAd;
     }
 
     // ── MutationObserver — primary driver ─────────────────────────
@@ -347,7 +342,6 @@ private val AD_BLOCK_JS = """
 // ═══════════════════════════════════════════════════════════════════
 // === PART 9/10 — Bottom Sheet UI ===
 // ═══════════════════════════════════════════════════════════════════
-
 @Composable
 fun HueTubeBottomSheet(
     adBlockEnabled: Boolean,
@@ -395,9 +389,8 @@ fun HueTubeBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            // ── Ad Block Toggle ───────────────────────────────────
-            Row(
-                modifier = Modifier
+            // ── Skip Ads Toggle ───────────────────────────────────
+            Row(                modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -405,13 +398,13 @@ fun HueTubeBottomSheet(
             ) {
                 Column {
                     Text(
-                        "Ad Blocking",
+                        "Skip Ads",
                         color = TEXT_PRI,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        if (adBlockEnabled) "10x speed + auto-skip active"
+                        if (adBlockEnabled) "Active — ads are skipped automatically"
                         else "Disabled — ads play normally",
                         color = TEXT_SEC,
                         fontSize = 12.sp
@@ -436,15 +429,7 @@ fun HueTubeBottomSheet(
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
 
-            // ── Info text ─────────────────────────────────────────
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Ads are sped up 10x and muted.\nSkip button is auto-clicked when it appears.",
-                color = TEXT_SEC,
-                fontSize = 11.sp,
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
-
+            // ── Future features below this line ───────────────────
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -454,8 +439,7 @@ fun HueTubeBottomSheet(
 
 
 // ═══════════════════════════════════════════════════════════════════
-// === PART 10/10 — Main App Composable ===
-// ═══════════════════════════════════════════════════════════════════
+// === PART 10/10 — Main App Composable ===// ═══════════════════════════════════════════════════════════════════
 
 @Composable
 fun HueTubeApp() {
@@ -504,8 +488,7 @@ fun HueTubeApp() {
                     fullscreenCallback = callback
                     isFullscreen = true
                     fullscreenManager.enterFullscreen(view, callback, container, this@apply)
-                }
-                override fun onHideCustomView() {
+                }                override fun onHideCustomView() {
                     fullscreenManager.exitFullscreen(fullscreenCallback)
                     fullscreenCallback = null
                     isFullscreen = false
@@ -554,8 +537,7 @@ fun HueTubeApp() {
             .fillMaxSize()
             .background(BG)
             .systemBarsPadding()
-    ) {
-        AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
+    ) {        AndroidView(factory = { container }, modifier = Modifier.fillMaxSize())
 
         // Floating menu button — bottom-left, hidden in fullscreen
         if (!isFullscreen) {
@@ -598,5 +580,3 @@ fun HueTubeApp() {
 }
 
 // END OF PART 10/10
-
-
