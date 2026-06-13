@@ -205,8 +205,9 @@ private val DARK_MODE_JS = """
 
 // END OF PART 4/10
 
+
 // ═══════════════════════════════════════════════════════════════════
-// === PART 5/10 — Ad Block JS (Seek-to-End + Mute + CSS) ===
+// === PART 5/10 — Ad Block JS (Seek-to-End + Auto-Skip + CSS) ===
 // ═══════════════════════════════════════════════════════════════════
 //
 // !! THIS IS THE ONLY PART THAT NEEDS UPDATING WHEN ADS BREAK !!
@@ -223,10 +224,10 @@ private val DARK_MODE_JS = """
 //
 // Strategy:
 //   1. Guard — only init once per page via window.__ht_init__
-//   2. Detect ad via multiple signals
-//   3. Mute video during ad
-//   4. Seek to duration - 0.1 to jump to end of ad
-//   5. Restore mute when ad ends via window.__ht_wasAd__ flag
+//   2. Skip button present → click it immediately
+//   3. Ad playing + duration known → seek to duration - 0.1
+//   4. Duration unknown → nudge +2s every 100ms
+//   5. Mute during ad, restore after
 //   6. CSS hides ad overlays/banners
 //   7. MutationObserver primary + setInterval fallback
 //
@@ -249,8 +250,6 @@ private val AD_BLOCK_JS = """
         '.ytp-ad-progress,' +
         '.ytp-ad-progress-list,' +
         '.ytp-ad-simple-ad-badge,' +
-        '.ytp-ad-skip-button-container,' +
-        '.ytp-ad-skip-button-modern,' +
         'ytd-promoted-sparkles-web-renderer,' +
         'ytd-action-companion-ad-renderer,' +
         'ytd-display-ad-renderer,' +
@@ -270,11 +269,22 @@ private val AD_BLOCK_JS = """
 
     // ── Detect ad playing ─────────────────────────────────────────
     function isAdPlaying() {
+        if (getSkipBtn()) return true;
         if (document.querySelector('.ytp-ad-player-overlay-instream-info')) return true;
         if (document.querySelector('.ytp-ad-simple-ad-badge')) return true;
-        if (document.querySelector('.ytp-ad-duration-remaining')) return true;
         if (document.querySelector('.ad-showing')) return true;
+        if (document.querySelector('.ytp-ad-duration-remaining')) return true;
         return false;
+    }
+
+    // ── Find skip button ──────────────────────────────────────────
+    function getSkipBtn() {
+        return document.querySelector('.ytp-ad-skip-button') ||
+               document.querySelector('.ytp-skip-ad-button') ||
+               document.querySelector('.ytp-ad-skip-button-modern') ||
+               document.querySelector('button.ytp-ad-skip-button-modern') ||
+               document.querySelector('[class*="skip-button"]') ||
+               document.querySelector('[class*="skip-ad"]');
     }
 
     // ── Get active video element ──────────────────────────────────
@@ -286,35 +296,85 @@ private val AD_BLOCK_JS = """
         return null;
     }
 
+    // ── Nudge interval for unknown duration ───────────────────────
+    var seekInterval = null;
+
+    function stopSeekInterval() {
+        if (seekInterval !== null) {
+            clearInterval(seekInterval);
+            seekInterval = null;
+        }
+    }
+
+    function startSeekInterval(video) {
+        if (seekInterval !== null) return;
+        seekInterval = setInterval(function() {
+            if (!isAdPlaying()) { stopSeekInterval(); return; }
+            var v = getVideo();
+            if (!v) return;
+            if (v.duration && isFinite(v.duration) && v.duration > 0) {
+                v.currentTime = v.duration - 0.1;
+                stopSeekInterval();
+            } else {
+                v.currentTime = v.currentTime + 2;
+            }
+        }, 100);
+    }
+
     // ── Core handler ──────────────────────────────────────────────
     function handleAd() {
         injectCss();
-        var nowAd = isAdPlaying();
 
-        if (nowAd) {
-            var v = getVideo();
-            if (v) {
-                if (!v.muted) v.muted = true;
-                if (v.duration && isFinite(v.duration) && v.duration > 0) {
-                    v.currentTime = v.duration - 0.1;
-                }
-            }
-        } else if (window.__ht_wasAd__ && !nowAd) {
-            // Ad just ended — restore mute
-            var v2 = getVideo();
-            if (v2) v2.muted = false;
+        // Click skip if present
+        var skip = getSkipBtn();
+        if (skip) {
+            skip.click();
+            stopSeekInterval();
+            return;
         }
 
+        if (!isAdPlaying()) {
+            stopSeekInterval();
+            return;
+        }
+
+        // Mute ad
+        var v = getVideo();
+        if (v) {
+            if (!v.muted) v.muted = true;
+
+            // Seek to end if duration known
+            if (v.duration && isFinite(v.duration) && v.duration > 0) {
+                v.currentTime = v.duration - 0.1;
+                stopSeekInterval();
+            } else {
+                startSeekInterval(v);
+            }
+        }
+    }
+
+    // ── Restore after ad ends ─────────────────────────────────────
+    function checkAdEnd() {
+        var nowAd = isAdPlaying();
+        if (window.__ht_wasAd__ && !nowAd) {
+            var v = getVideo();
+            if (v) v.muted = false;
+            stopSeekInterval();
+        }
         window.__ht_wasAd__ = nowAd;
     }
 
     // ── MutationObserver — primary driver ─────────────────────────
     new MutationObserver(function() {
         handleAd();
+        checkAdEnd();
     }).observe(document.documentElement, { childList: true, subtree: true });
 
     // ── setInterval fallback ──────────────────────────────────────
-    setInterval(handleAd, 300);
+    setInterval(function() {
+        handleAd();
+        checkAdEnd();
+    }, 300);
 
     injectCss();
 })();
@@ -394,7 +454,7 @@ fun HueTubeBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            // ── Skip Ads Toggle ───────────────────────────────────
+            // ── Ad Block Toggle ───────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -404,13 +464,13 @@ fun HueTubeBottomSheet(
             ) {
                 Column {
                     Text(
-                        "Skip Ads",
+                        "Ad Blocking",
                         color = TEXT_PRI,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        if (adBlockEnabled) "Active — ads are skipped automatically"
+                        if (adBlockEnabled) "10x speed + auto-skip active"
                         else "Disabled — ads play normally",
                         color = TEXT_SEC,
                         fontSize = 12.sp
@@ -435,14 +495,21 @@ fun HueTubeBottomSheet(
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
 
-            // ── Future features below this line ───────────────────
+            // ── Info text ─────────────────────────────────────────
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Ads are sped up 10x and muted.\nSkip button is auto-clicked when it appears.",
+                color = TEXT_SEC,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+
             Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 // END OF PART 9/10
-
 
 
 // ═══════════════════════════════════════════════════════════════════
@@ -590,5 +657,3 @@ fun HueTubeApp() {
 }
 
 // END OF PART 10/10
-
-
